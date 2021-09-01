@@ -32,6 +32,17 @@ struct unstoppable_token {
   }
 };
 
+class unstoppable_source {
+ public:
+  constexpr bool request_stop() noexcept { return false; }
+
+  constexpr unstoppable_token get_token() noexcept { return unstoppable_token{}; }
+
+  constexpr bool stop_requested() const noexcept {
+    return false;
+  }
+};
+
 } // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

@@ -21,6 +21,7 @@
 #include <unifex/any_scheduler.hpp>
 #include <unifex/any_sender_of.hpp>
 #include <unifex/timed_single_thread_context.hpp>
+#include <unifex/trampoline_scheduler.hpp>
 #include <unifex/stop_when.hpp>
 #include <unifex/static_thread_pool.hpp>
 #include <unifex/then.hpp>
@@ -52,8 +53,8 @@ inline constexpr auto sink = [](auto&&...){};
 inline constexpr auto discard = then(sink);
 
 template <typename F>
-auto defer(F f) {
-  return let_value(just(), (F&&) f);
+auto fork(F f) {
+  return let_value(schedule(), (F&&) f);
 }
 
 //
@@ -265,14 +266,15 @@ bool examine_potentials(board_element *b, bool *progress) {
 
 struct any_solve_scheduler;
 
-using SchedulerQueries =
+using Queries =
   with_receiver_queries<
-    overload<any_solve_scheduler(const this_&)>(unifex::get_scheduler),
-    overload<inplace_stop_token(const this_&) noexcept>(get_stop_token)>;
-
-using any_solve_scheduler_impl = SchedulerQueries::any_scheduler;
+    overload<static_thread_pool::scheduler(const this_&)>(unifex::get_scheduler),
+    overload<inplace_stop_token(const this_&) noexcept>(get_stop_token),
+    overload<std::reference_wrapper<inplace_stop_source>(const this_&) noexcept>(get_stop_source)>;
 
 struct any_solve_scheduler {
+  using any_solve_scheduler_impl = Queries::any_scheduler;
+
   UNIFEX_TEMPLATE (typename Sched)
     (requires (!same_as<Sched, any_solve_scheduler>) UNIFEX_AND
       scheduler<Sched> UNIFEX_AND
@@ -283,33 +285,25 @@ struct any_solve_scheduler {
   auto schedule() const {
     return unifex::schedule(impl_);
   }
-  bool operator==(const any_solve_scheduler&) const = default;
+  bool operator==(const any_solve_scheduler& o) const {
+    return o.impl_ == impl_;
+  }
+  bool operator!=(const any_solve_scheduler& o) const {
+    return o.impl_ != impl_;
+  }
 private:
   any_solve_scheduler_impl impl_;
 };
 
-using SenderQueries =
-  with_receiver_queries<
-    overload<any_solve_scheduler(const this_&)>(unifex::get_scheduler),
-    overload<inplace_stop_token(const this_&) noexcept>(get_stop_token)>;
-
-using any_solve = SenderQueries::any_sender_of<>;
-
-std::atomic<unsigned> partialsolveid;
-std::atomic<unsigned> partialsolvestarts;
+using any_solve = Queries::any_sender_of<>;
 
 any_solve partial_solve(board_element *board, unsigned first_potential_set) {
-    unsigned id = ++partialsolveid;
-
-    return on(current_scheduler,
-    defer([=, first_set = first_potential_set]() -> any_solve {
-        unsigned seq = ++partialsolvestarts;
+    return fork([=, first_set = first_potential_set]() -> any_solve {
         unsigned first_potential_set = first_set;
         std::unique_ptr<board_element> b(board);
         ++nDeletedBoards;
         if (fixed_board(b.get())) {
             if (++nSols == 1 && verbose) {
-                printf("partial_solve id: %u, starts: %u\n", id, seq);
                 print_board(b.get());
             }
             if (find_one) {
@@ -346,33 +340,35 @@ any_solve partial_solve(board_element *board, unsigned first_potential_set) {
                 potential_board(6),
                 potential_board(7),
                 potential_board(8),
-                potential_board(9)) 
+                potential_board(9)
+              ) 
               | discard
             };
         }
         return {just()};
-    }));
+    });
 }
 
 std::tuple<unsigned, steady_clock::duration> solve(static_thread_pool::scheduler pool) {
     nSols = 0;
     nPotentialBoards = 0;
     nDeletedBoards = 0;
-    partialsolveid = 0;
-    partialsolvestarts = 0;
     std::unique_ptr<board_element[]> start_board{new board_element[BOARD_SIZE]};
     init_board(start_board.get(), init_values);
     auto start = steady_clock::now();
     ++nPotentialBoards;
     inplace_stop_source stop;
     auto canceled = [](){
-      printf("\ncanceled\n\n");
+      if (verbose) {
+        printf("\ncanceled \n\n");
+      }
     };
     inplace_stop_token::template callback_type<decltype(canceled)> callback(stop.get_token(), canceled);
     sync_wait(
         partial_solve(start_board.release(), 0) 
         | with_query_value(get_scheduler, pool) 
-        | with_query_value(get_stop_token, stop.get_token()));
+        | with_query_value(get_stop_token, stop.get_token())
+        | with_query_value(get_stop_source, std::ref(stop)));
     return std::make_tuple((unsigned)nSols, steady_clock::now() - start);
 }
 
@@ -418,9 +414,6 @@ int main(int argc, char* argv[]) {
   for (std::uint32_t p = 1; p <= threadCount; ++p) {
     static_thread_pool poolContext(p);
     auto pool = poolContext.get_scheduler();
-
-    any_solve_scheduler pl{pool};
-    any_solve_scheduler cs{current_scheduler};
 
     auto [number, solve_time] = solve(pool);
 

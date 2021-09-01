@@ -17,6 +17,7 @@
 
 #include <unifex/async_trace.hpp>
 #include <unifex/get_stop_token.hpp>
+#include <unifex/get_stop_source.hpp>
 #include <unifex/inplace_stop_token.hpp>
 #include <unifex/manual_lifetime.hpp>
 #include <unifex/receiver_concepts.hpp>
@@ -92,11 +93,23 @@ struct _operation_tuple<Index, Receiver>::type {
   void start() noexcept {}
 };
 
+template <typename CallerStopSource>
 struct cancel_operation {
   inplace_stop_source& stopSource_;
+  CallerStopSource callerStopSource_;
+
+  template<typename CallerStopSourceInner>
+  static void request_caller_stop(std::reference_wrapper<CallerStopSourceInner> r) {
+    r.get().request_stop();
+  }
+  template<typename CallerStopSourceOuter>
+  static void request_caller_stop(CallerStopSourceOuter& r) {
+    r.request_stop();
+  }
 
   void operator()() noexcept {
     stopSource_.request_stop();
+    request_caller_stop(callerStopSource_);
   }
 };
 
@@ -202,6 +215,8 @@ template <typename Receiver, typename... Senders>
 struct _op<Receiver, Senders...>::type {
   using operation = type;
   using receiver_type = Receiver;
+  using caller_stop_source_t = get_stop_source_result_t<receiver_type>;
+  using cancel_operation_t = cancel_operation<caller_stop_source_t>;
   template <std::size_t Index, typename Receiver2, typename... Senders2>
   friend struct _element_receiver;
 
@@ -211,7 +226,7 @@ struct _op<Receiver, Senders...>::type {
 
   void start() noexcept {
     stopCallback_.construct(
-        get_stop_token(receiver_), cancel_operation{stopSource_});
+        get_stop_token(receiver_), cancel_operation_t{stopSource_, get_stop_source(receiver_)});
     ops_.start();
   }
 
@@ -259,7 +274,7 @@ struct _op<Receiver, Senders...>::type {
   std::atomic<bool> doneOrError_{false};
   inplace_stop_source stopSource_;
   UNIFEX_NO_UNIQUE_ADDRESS manual_lifetime<typename stop_token_type_t<
-      Receiver&>::template callback_type<cancel_operation>>
+      Receiver&>::template callback_type<cancel_operation_t>>
       stopCallback_;
   Receiver receiver_;
   template <std::size_t Index>
