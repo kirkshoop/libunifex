@@ -21,10 +21,10 @@
 #include <unifex/any_scheduler.hpp>
 #include <unifex/any_sender_of.hpp>
 #include <unifex/timed_single_thread_context.hpp>
-#include <unifex/trampoline_scheduler.hpp>
 #include <unifex/stop_when.hpp>
 #include <unifex/static_thread_pool.hpp>
 #include <unifex/then.hpp>
+#include <unifex/sequence.hpp>
 #include <unifex/when_all.hpp>
 #include <unifex/just_done.hpp>
 #include <unifex/just.hpp>
@@ -64,8 +64,6 @@ auto fork(F f) {
 const unsigned BOARD_SIZE = 81;
 const unsigned BOARD_DIM = 9;
 std::atomic<unsigned> nSols;
-std::atomic<unsigned> nPotentialBoards;
-std::atomic<unsigned> nDeletedBoards;
 bool find_one = false;
 bool verbose = false;
 unsigned short init_values[BOARD_SIZE] = { 1, 0, 0, 9, 0, 0, 0, 8, 0, 0, 8, 0, 2, 0, 0, 0, 0,
@@ -272,61 +270,34 @@ using Queries =
     overload<inplace_stop_token(const this_&) noexcept>(get_stop_token),
     overload<std::reference_wrapper<inplace_stop_source>(const this_&) noexcept>(get_stop_source)>;
 
-struct any_solve_scheduler {
-  using any_solve_scheduler_impl = Queries::any_scheduler;
-
-  UNIFEX_TEMPLATE (typename Sched)
-    (requires (!same_as<Sched, any_solve_scheduler>) UNIFEX_AND
-      scheduler<Sched> UNIFEX_AND
-      constructible_from<any_solve_scheduler_impl, Sched>)
-  any_solve_scheduler(Sched sch)
-    : impl_(std::move(sch))
-  {}
-  auto schedule() const {
-    return unifex::schedule(impl_);
-  }
-  bool operator==(const any_solve_scheduler& o) const {
-    return o.impl_ == impl_;
-  }
-  bool operator!=(const any_solve_scheduler& o) const {
-    return o.impl_ != impl_;
-  }
-private:
-  any_solve_scheduler_impl impl_;
-};
-
 using any_solve = Queries::any_sender_of<>;
 
-any_solve partial_solve(board_element *board, unsigned first_potential_set) {
-    return fork([=, first_set = first_potential_set]() -> any_solve {
-        unsigned first_potential_set = first_set;
-        std::unique_ptr<board_element> b(board);
-        ++nDeletedBoards;
-        if (fixed_board(b.get())) {
+any_solve partial_solve(std::unique_ptr<board_element[]> board, unsigned first_potential_set) {
+    return fork([=, board = std::move(board)]() mutable -> any_solve {
+        if (fixed_board(board.get())) {
             if (++nSols == 1 && verbose) {
-                print_board(b.get());
+                print_board(board.get());
             }
             if (find_one) {
               return {just_done()};
             }
             return {just()};
         }
-        calculate_potentials(b.get());
+        calculate_potentials(board.get());
         bool progress = true;
-        bool success = examine_potentials(b.get(), &progress);
+        bool success = examine_potentials(board.get(), &progress);
         if (success && progress) {
-            return {partial_solve(b.release(), first_potential_set)};
+            return {partial_solve(std::move(board), first_potential_set)};
         }
         else if (success && !progress) {
-            while (b.get()[first_potential_set].solved_element != 0)
+            while (board.get()[first_potential_set].solved_element != 0)
                 ++first_potential_set;
-            auto potential_board = [=, b = std::move(b)](unsigned short potential) -> any_solve {
-                if (1 << (potential - 1) & b.get()[first_potential_set].potential_set) {
+            auto potential_board = [=, board = std::move(board)](unsigned short potential) -> any_solve {
+                if (1 << (potential - 1) & board.get()[first_potential_set].potential_set) {
                     std::unique_ptr<board_element[]> new_board{new board_element[BOARD_SIZE]};
-                    copy_board(b.get(), new_board.get());
+                    copy_board(board.get(), new_board.get());
                     new_board.get()[first_potential_set].solved_element = potential;
-                    ++nPotentialBoards;
-                    return {partial_solve(new_board.release(), first_potential_set)};
+                    return {partial_solve(std::move(new_board), first_potential_set)};
                 }
                 return {just()};
             };
@@ -341,8 +312,7 @@ any_solve partial_solve(board_element *board, unsigned first_potential_set) {
                 potential_board(7),
                 potential_board(8),
                 potential_board(9)
-              ) 
-              | discard
+              ) | discard
             };
         }
         return {just()};
@@ -351,12 +321,9 @@ any_solve partial_solve(board_element *board, unsigned first_potential_set) {
 
 std::tuple<unsigned, steady_clock::duration> solve(static_thread_pool::scheduler pool) {
     nSols = 0;
-    nPotentialBoards = 0;
-    nDeletedBoards = 0;
     std::unique_ptr<board_element[]> start_board{new board_element[BOARD_SIZE]};
     init_board(start_board.get(), init_values);
     auto start = steady_clock::now();
-    ++nPotentialBoards;
     inplace_stop_source stop;
     auto canceled = [](){
       if (verbose) {
@@ -365,7 +332,7 @@ std::tuple<unsigned, steady_clock::duration> solve(static_thread_pool::scheduler
     };
     inplace_stop_token::template callback_type<decltype(canceled)> callback(stop.get_token(), canceled);
     sync_wait(
-        partial_solve(start_board.release(), 0) 
+        partial_solve(std::move(start_board), 0) 
         | with_query_value(get_scheduler, pool) 
         | with_query_value(get_stop_token, stop.get_token())
         | with_query_value(get_stop_source, std::ref(stop)));
@@ -428,9 +395,6 @@ int main(int argc, char* argv[]) {
                number,
                p,
                std::chrono::duration_cast<double_sec>(solve_time).count());
-      }
-      if (nPotentialBoards > nDeletedBoards) {
-          printf("Leaked %u boards!\n", nPotentialBoards - nDeletedBoards);
       }
     }
   }
