@@ -19,6 +19,7 @@
 #include <unifex/sender_concepts.hpp>
 #include <unifex/tag_invoke.hpp>
 #include <unifex/sender_for.hpp>
+#include <unifex/blocking.hpp>
 
 #include <type_traits>
 #include <exception>
@@ -87,6 +88,7 @@ namespace _schedule {
         -> _result_t<Scheduler> {
       return static_cast<Scheduler&&>(s).schedule();
     }
+  };
 
   template <typename S>
   using _schedule_result_t = decltype(_impl{}(UNIFEX_DECLVAL(S&&)));
