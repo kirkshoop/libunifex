@@ -194,35 +194,6 @@ inline constexpr _schedule::_fn schedule {};
 template <typename S>
 using schedule_result_t = decltype(schedule(UNIFEX_DECLVAL(S&&)));
 
-namespace _schedule {
-struct sender {
-  template <
-    template <typename...> class Variant,
-    template <typename...> class Tuple>
-  using value_types = Variant<Tuple<>>;
-
-  template <template <typename...> class Variant>
-  using error_types = Variant<std::exception_ptr>;
-
-  static constexpr bool sends_done = true;
-
-  template(typename Receiver)
-    (requires receiver<Receiver>)
-  friend auto tag_invoke(tag_t<connect>, sender, Receiver &&r)
-      -> connect_result_t<
-            schedule_result_t<
-                get_scheduler_result_t<const remove_cvref_t<Receiver>&>>,
-            Receiver> {
-    auto scheduler = get_scheduler(std::as_const(r));
-    return connect(schedule(std::move(scheduler)), (Receiver &&) r);
-  }
-};
-
-inline constexpr sender _fn::operator()() const noexcept {
-  return {};
-}
-} // namespace _schedule
-
 namespace _schedule_after {
   template <typename Duration>
   struct _sender {
@@ -455,9 +426,8 @@ namespace _current {
 #endif // !UNIFEX_NO_COROUTINES
 
   public:
-    auto schedule() const noexcept {
-        return unifex::schedule();
-    }
+    _schedule::sender schedule() const noexcept;
+
     template <typename Duration>
     auto schedule_after(Duration d) const {
         return unifex::schedule_after(std::move(d));
@@ -478,6 +448,46 @@ namespace _current {
   };
 } // namespace _current
 inline constexpr _current::_scheduler current_scheduler {};
+
+namespace _schedule {
+struct sender {
+  template <
+    template <typename...> class Variant,
+    template <typename...> class Tuple>
+  using value_types = Variant<Tuple<>>;
+
+  template <template <typename...> class Variant>
+  using error_types = Variant<std::exception_ptr>;
+
+  static constexpr bool sends_done = true;
+
+private:
+  friend auto tag_invoke(tag_t<get_scheduler>, const sender&) noexcept {
+    return current_scheduler;
+  }
+
+  template(typename Receiver)
+    (requires receiver<Receiver>)
+  friend auto tag_invoke(tag_t<connect>, sender, Receiver &&r)
+      -> connect_result_t<
+            schedule_result_t<
+                get_scheduler_result_t<const remove_cvref_t<Receiver>&>>,
+            Receiver> {
+    auto scheduler = get_scheduler(std::as_const(r));
+    return connect(schedule(std::move(scheduler)), (Receiver &&) r);
+  }
+};
+
+inline constexpr sender _fn::operator()() const noexcept {
+  return {};
+}
+} // namespace _schedule
+
+namespace _current {
+    _schedule::sender _scheduler::schedule() const noexcept {
+        return unifex::schedule();
+    }
+} // namespace _current
 
 } // namespace unifex
 
