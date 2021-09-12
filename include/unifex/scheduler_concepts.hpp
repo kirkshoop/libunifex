@@ -145,7 +145,7 @@ template <typename SchedulerProvider>
 using get_scheduler_result_t =
     decltype(get_scheduler(UNIFEX_DECLVAL(SchedulerProvider&&)));
 
-// Define the scheduler concept without the macros for better diagnostics
+// Define the scheduler_provider concept without the macros for better diagnostics
 #if UNIFEX_CXX_CONCEPTS
 template <typename SP>
 concept //
@@ -166,24 +166,76 @@ UNIFEX_CONCEPT //
     UNIFEX_FRAGMENT(unifex::_scheduler_provider, SP);
 #endif
 
+
+namespace _is_cpo_recursive {
+  struct _fn {
+    template (typename Scheduler, typename CPO)
+        (requires tag_invocable<_fn, const Scheduler&, CPO>)
+    auto operator()(const Scheduler& context, CPO cpo) const noexcept
+        -> tag_invoke_result_t<_fn, const Scheduler&, CPO> {
+      static_assert(is_nothrow_tag_invocable_v<_fn, const Scheduler&, CPO>);
+      static_assert(
+          scheduler<tag_invoke_result_t<_fn, const Scheduler&, CPO>>);
+      return tag_invoke(*this, context, cpo);
+    }
+  };
+} // namespace _is_cpo_recursive
+inline constexpr _is_cpo_recursive::_fn is_cpo_recursive {};
+
+// Define the scheduler_provider concept without the macros for better diagnostics
+#if UNIFEX_CXX_CONCEPTS
+template <typename SP, typename CPO>
+concept //
+  cpo_recursive = //
+    requires(SP&& sp, CPO cpo) {
+      is_cpo_recursive((SP&&) sp, cpo);
+    };
+#else
+template <typename SP, typename CPO>
+UNIFEX_CONCEPT_FRAGMENT( //
+  _cpo_recursive,
+    requires(SP&& sp, CPO cpo) (
+      is_cpo_recursive((SP&&) sp, cpo)
+    ));
+template <typename SP, typename CPO>
+UNIFEX_CONCEPT //
+  cpo_recursive = //
+    UNIFEX_FRAGMENT(unifex::_cpo_recursive, SP, CPO);
+#endif
+
+
+// Define the scheduler_sender concept without the macros for better diagnostics
+#if UNIFEX_CXX_CONCEPTS
+template <typename SP>
+concept //
+  scheduler_sender = //
+    sender<SP> && scheduler_provider<SP> && cpo_recursive<callable_result_t<tag_t<get_scheduler>, SP>, tag_t<schedule>>;
+#else
+template <typename SP>
+UNIFEX_CONCEPT //
+  scheduler_sender = //
+    sender<SP> && scheduler_provider<SP> && cpo_recursive<callable_result_t<tag_t<get_scheduler>, SP>, tag_t<schedule>>;
+#endif
+
 namespace _schedule
 {
   struct _fn {
-  private:
-    template <typename Scheduler>
-    static auto impl_(Scheduler sched)
-        noexcept(noexcept(make_sender_for<schedule>(
-            _impl{}((Scheduler&&) sched), get_scheduler = Scheduler(sched)))) {
-      return make_sender_for<schedule>(
-          _impl{}((Scheduler&&) sched), get_scheduler = Scheduler(sched));
-    }
+  // private:
+  //   template <typename Scheduler>
+  //   static auto impl_(Scheduler sched)
+  //       noexcept(noexcept(make_sender_for<schedule>(
+  //           _impl{}((Scheduler&&) sched), get_scheduler = Scheduler(sched)))) {
+  //     return make_sender_for<schedule>(
+  //         _impl{}((Scheduler&&) sched), get_scheduler = Scheduler(sched));
+  //   }
   public:
     template (typename Scheduler)
       (requires scheduler<Scheduler>)
     auto operator()(Scheduler&& sched) const
-        noexcept(noexcept(_fn::impl_((Scheduler&&) sched)))
-        -> decltype(_fn::impl_((Scheduler&&) sched)) {
-      return _fn::impl_((Scheduler&&) sched);
+        noexcept(is_nothrow_tag_invocable_v<_fn, Scheduler>)
+        -> tag_invoke_result_t<_fn, Scheduler> {
+      static_assert(scheduler_sender<tag_invoke_result_t<_fn, Scheduler>>);
+      return tag_invoke(*this, (Scheduler&&) sched);
     }
 
     constexpr sender operator()() const noexcept;
@@ -426,6 +478,16 @@ namespace _current {
 #endif // !UNIFEX_NO_COROUTINES
 
   public:
+    friend bool tag_invoke(tag_t<is_cpo_recursive>, const _scheduler&, tag_t<unifex::schedule>) noexcept {
+      return true;
+    }
+    
+    // better v than ^
+
+    // friend auto tag_invoke(tag_t<override_query_value>, const _scheduler&, tag_t<get_scheduler>) noexcept {
+    //   return false;
+    // }
+
     _schedule::sender schedule() const noexcept;
 
     template <typename Duration>
@@ -488,6 +550,12 @@ namespace _current {
         return unifex::schedule();
     }
 } // namespace _current
+
+static_assert(sender<_schedule::sender>);
+static_assert(scheduler_provider<_schedule::sender>);
+static_assert(cpo_recursive<callable_result_t<tag_t<get_scheduler>, _schedule::sender>, tag_t<schedule>>);
+
+static_assert(scheduler_sender<_schedule::sender>);
 
 } // namespace unifex
 
