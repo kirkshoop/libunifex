@@ -20,6 +20,7 @@
 #include <unifex/with_query_value.hpp>
 #include <unifex/sync_wait.hpp>
 #include <unifex/just.hpp>
+#include <unifex/then.hpp>
 #include <unifex/repeat_effect_until.hpp>
 
 #include <chrono>
@@ -33,12 +34,15 @@ using namespace std::chrono_literals;
 
 TEST(ReceiverTailCall, Smoke) {
   unifex::timed_single_thread_context time;
-
+  int iterations = 0;
   sync_wait(
     just() 
+    | then([&iterations]{++iterations;})
     | repeat_effect()
     | unifex::stop_when(
-      unifex::schedule_after(1s))
+      unifex::schedule_after(2s))
     | with_query_value(unifex::get_scheduler, time.get_scheduler())
   );
+
+  std::cout << "result: there were " << iterations << " iterations in 2s\n";
 }

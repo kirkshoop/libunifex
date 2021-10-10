@@ -123,7 +123,7 @@ std::optional<Result> _impl(Sender&& sender) {
       (Sender&&)sender,
       _sync_wait::receiver_t<Result>{promise, ctx});
 
-  start(operation);
+  resume_tail_callable(result_or_null_tail_callable(unifex::start, operation));
 
   ctx.run();
 

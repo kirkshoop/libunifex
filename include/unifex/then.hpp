@@ -60,46 +60,57 @@ struct _receiver<Receiver, Func>::type {
   UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
 
   template <typename... Values>
-  void set_value(Values&&... values) && noexcept {
+  auto set_value(Values&&... values) && noexcept {
     using result_type = std::invoke_result_t<Func, Values...>;
     if constexpr (std::is_void_v<result_type>) {
+      using tail_t = variant_tail_callable<
+        callable_result_t<tag_t<unifex::set_value>, Receiver>,
+        callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
       if constexpr (noexcept(std::invoke(
                         (Func &&) func_, (Values &&) values...))) {
         std::invoke((Func &&) func_, (Values &&) values...);
-        unifex::set_value((Receiver &&) receiver_);
+        return tail_t{result_or_null_tail_callable(unifex::set_value, (Receiver &&) receiver_)};
       } else {
         UNIFEX_TRY {
           std::invoke((Func &&) func_, (Values &&) values...);
-          unifex::set_value((Receiver &&) receiver_);
+          return tail_t{result_or_null_tail_callable(unifex::set_value, (Receiver &&) receiver_)};
         } UNIFEX_CATCH (...) {
-          unifex::set_error((Receiver &&) receiver_, std::current_exception());
+          return tail_t{result_or_null_tail_callable(unifex::set_error, (Receiver &&) receiver_, std::current_exception())};
         }
       }
     } else {
+      using tail_t = variant_tail_callable<
+        callable_result_t<tag_t<unifex::set_value>, Receiver, result_type>,
+        callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
       if constexpr (noexcept(std::invoke(
                         (Func &&) func_, (Values &&) values...))) {
-        unifex::set_value(
+        return tail_t{result_or_null_tail_callable(
+            unifex::set_value,
             (Receiver &&) receiver_,
-            std::invoke((Func &&) func_, (Values &&) values...));
+            std::invoke((Func &&) func_, (Values &&) values...))};
       } else {
         UNIFEX_TRY {
-          unifex::set_value(
+          return tail_t{result_or_null_tail_callable(
+              unifex::set_value,
               (Receiver &&) receiver_,
-              std::invoke((Func &&) func_, (Values &&) values...));
+              std::invoke((Func &&) func_, (Values &&) values...))};
         } UNIFEX_CATCH (...) {
-          unifex::set_error((Receiver &&) receiver_, std::current_exception());
+          return tail_t{result_or_null_tail_callable(
+              unifex::set_error, 
+              (Receiver &&) receiver_, 
+              std::current_exception())};
         }
       }
     }
   }
 
   template <typename Error>
-  void set_error(Error&& error) && noexcept {
-    unifex::set_error((Receiver &&) receiver_, (Error &&) error);
+  auto set_error(Error&& error) && noexcept {
+    return unifex::set_error((Receiver &&) receiver_, (Error &&) error);
   }
 
-  void set_done() && noexcept {
-    unifex::set_done((Receiver &&) receiver_);
+  auto set_done() && noexcept {
+    return unifex::set_done((Receiver &&) receiver_);
   }
 
   template(typename CPO, typename R)
