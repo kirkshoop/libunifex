@@ -237,8 +237,8 @@ public:
     startedOp_ = 0;
   }
 
-  void start() & noexcept {
-    unifex::start(sourceOp_.get());
+  auto start() & noexcept {
+    return unifex::start(sourceOp_.get());
   }
 
 private:

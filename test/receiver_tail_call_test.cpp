@@ -21,6 +21,7 @@
 #include <unifex/sync_wait.hpp>
 #include <unifex/just.hpp>
 #include <unifex/then.hpp>
+#include <unifex/let_done.hpp>
 #include <unifex/repeat_effect_until.hpp>
 
 #include <chrono>
@@ -41,8 +42,8 @@ TEST(ReceiverTailCall, Smoke) {
     | repeat_effect()
     | unifex::stop_when(
       unifex::schedule_after(2s))
+    | let_done([]{ return just(); })
+    | then([&iterations]{ std::cout << "result: there were " << iterations << " iterations in 2s\n"; })
     | with_query_value(unifex::get_scheduler, time.get_scheduler())
   );
-
-  std::cout << "result: there were " << iterations << " iterations in 2s\n";
 }

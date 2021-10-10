@@ -53,22 +53,18 @@ struct _op<Receiver, Values...>::type {
       return {std::apply(
           [&](Values&&... values) -> tail_t {
             using tail = callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>;
-            if constexpr (sender<tail>) {static_assert(sender<tail>, "just: sender not yet supported");}
-            else if constexpr (tail_callable<tail>) {
+            if constexpr (sender<tail>) {static_assert(!sender<tail>, "just: sender not yet supported");}
+            else {
               return result_or_null_tail_callable(unifex::set_value, (Receiver &&) receiver_, (Values &&) values...);
-            } else {
-              static_assert(!tail_callable<tail>, "just: unsupported set_value return type");
             }
           },
           std::move(values_))};
     } UNIFEX_CATCH (...) {
       using tail = callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>;
-      if constexpr (sender<tail>) {static_assert(sender<tail>, "just: sender not yet supported");}
-      else if constexpr (tail_callable<tail>) {
+      if constexpr (sender<tail>) {static_assert(!sender<tail>, "just: sender not yet supported");}
+      else {
         return {result_or_null_tail_callable(unifex::set_error, (Receiver &&) receiver_, std::current_exception())};
-      } else {
-        static_assert(!tail_callable<tail>, "just: unsupported set_error return type");
-      }
+      } 
     }
     return {null_tail_callable{}};
   }
