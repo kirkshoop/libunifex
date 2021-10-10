@@ -52,6 +52,96 @@ struct _sndr {
 };
 
 template <typename Source, typename Predicate, typename Receiver>
+struct _tail_start {
+  struct type {
+    using operation = operation_type<Source, Predicate, Receiver>;
+    operation* op_;
+    template(typename... Args)
+      (requires (sizeof...(Args) == 0))
+    auto invoke(Args...) const noexcept {
+      return unifex::start(op_->sourceOp_.get());
+    }
+    void destroy() const noexcept {
+      using tail = callable_result_t<tag_t<unifex::set_done>, Receiver>;
+      if constexpr (sender<tail>) {
+        static_assert(sender<tail>, "repeat_effect_until: sender not yet supported");
+      } else if constexpr (tail_callable<tail>) {
+        resume_tail_callable(unifex::set_done(std::move(op_->receiver_)));
+      } else if constexpr (std::is_void_v<tail>) {
+        unifex::set_done(std::move(op_->receiver_));
+      } else {
+        static_assert(!std::is_void_v<tail>, "repeat_effect_until: unsupported set_done result");
+      }
+    }
+  };
+};
+
+template <typename Source, typename Predicate, typename Receiver>
+struct _tail_restart {
+  struct type {
+    using operation = operation_type<Source, Predicate, Receiver>;
+    operation* op_;
+    template(typename... Args)
+      (requires (sizeof...(Args) == 0))
+    auto invoke(Args...) const noexcept {
+      using tail_t = variant_tail_callable<
+        null_tail_callable,
+        typename _tail_start<Source, Predicate, Receiver>::type,
+        callable_result_t<tag_t<unifex::set_value>, Receiver>,
+        callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
+      auto* op = op_;
+
+      if (op->stop_.stop_requested()) {
+        destroy();
+        return tail_t{null_tail_callable{}};
+      }
+
+      UNIFEX_ASSERT(op->isSourceOpConstructed_);
+      op->isSourceOpConstructed_ = false;
+      op->sourceOp_.destruct();
+
+      if constexpr (std::is_nothrow_invocable_v<Predicate&> && is_nothrow_connectable_v<Source&, type> && is_nothrow_tag_invocable_v<tag_t<unifex::set_value>, Receiver>) {
+        // call predicate and complete with void if it returns true
+        if(op->predicate_()) {
+          return tail_t{result_or_null_tail_callable(unifex::set_value, std::move(op->receiver_))};
+        }
+        op->sourceOp_.construct_with([&]() noexcept {
+            return unifex::connect(op->source_, typename _rcvr<Source, Predicate, Receiver>::type{op});
+          });
+        op->isSourceOpConstructed_ = true;
+        return tail_t{typename _tail_start<Source, Predicate, Receiver>::type{op}};
+      } else {
+        UNIFEX_TRY {
+          // call predicate and complete with void if it returns true
+          if(op->predicate_()) {
+            return tail_t{result_or_null_tail_callable(unifex::set_value, std::move(op->receiver_))};
+          }
+          op->sourceOp_.construct_with([&] {
+              return unifex::connect(op->source_, typename _rcvr<Source, Predicate, Receiver>::type{op});
+            });
+          op->isSourceOpConstructed_ = true;
+          return tail_t{typename _tail_start<Source, Predicate, Receiver>::type{op}};
+        } UNIFEX_CATCH (...) {
+          return tail_t{result_or_null_tail_callable(unifex::set_error, std::move(op->receiver_), std::current_exception())};
+        }
+      }
+    }
+    void destroy() const noexcept {
+      using tail = callable_result_t<tag_t<unifex::set_done>, Receiver>;
+      if constexpr (sender<tail>) {
+        static_assert(sender<tail>, "repeat_effect_until: sender not yet supported");
+      } else if constexpr (tail_callable<tail>) {
+        resume_tail_callable(unifex::set_done(std::move(op_->receiver_)));
+      } else if constexpr (std::is_void_v<tail>) {
+        unifex::set_done(std::move(op_->receiver_));
+      } else {
+        static_assert(!std::is_void_v<tail>, "repeat_effect_until: unsupported set_done result");
+      }
+    }
+  };
+};
+
+template <typename Source, typename Predicate, typename Receiver>
 class _rcvr<Source, Predicate, Receiver>::type {
   using operation = operation_type<Source, Predicate, Receiver>;
 public:
@@ -62,43 +152,12 @@ public:
   : op_(std::exchange(other.op_, {}))
   {}
  
-  void set_value() noexcept {
+  // This signals to repeat the operation.
+  template(typename... Args)
+    (requires (sizeof...(Args) == 0))
+  typename _tail_restart<Source, Predicate, Receiver>::type set_value(Args...) noexcept {
     UNIFEX_ASSERT(op_ != nullptr);
-
-    // This signals to repeat_effect_until the operation.
-    auto* op = op_;
-
-    UNIFEX_ASSERT(op->isSourceOpConstructed_);
-    op->isSourceOpConstructed_ = false;
-    op->sourceOp_.destruct();
-
-    if constexpr (std::is_nothrow_invocable_v<Predicate&> && is_nothrow_connectable_v<Source&, type> && is_nothrow_tag_invocable_v<tag_t<unifex::set_value>, Receiver>) {
-      // call predicate and complete with void if it returns true
-      if(op->predicate_()) {
-        unifex::set_value(std::move(op->receiver_));
-        return;
-      }
-      auto& sourceOp = op->sourceOp_.construct_with([&]() noexcept {
-          return unifex::connect(op->source_, type{op});
-        });
-      op->isSourceOpConstructed_ = true;
-      unifex::start(sourceOp);
-    } else {
-      UNIFEX_TRY {
-        // call predicate and complete with void if it returns true
-        if(op->predicate_()) {
-          unifex::set_value(std::move(op->receiver_));
-          return;
-        }
-        auto& sourceOp = op->sourceOp_.construct_with([&] {
-            return unifex::connect(op->source_, type{op});
-          });
-        op->isSourceOpConstructed_ = true;
-        unifex::start(sourceOp);
-      } UNIFEX_CATCH (...) {
-        unifex::set_error(std::move(op->receiver_), std::current_exception());
-      }
-    }
+    return {op_};
   }
 
   void set_done() noexcept {
@@ -143,7 +202,7 @@ private:
 
 template <typename Source, typename Predicate, typename Receiver>
 class _op<Source, Predicate, Receiver>::type {
-  using _receiver_t = receiver_t<Source, Predicate, Receiver>;
+  using _stop_token_t = get_stop_token_result_t<Receiver>;
 
 public:
   template <typename Source2, typename Predicate2, typename Receiver2>
@@ -151,13 +210,14 @@ public:
       noexcept(std::is_nothrow_constructible_v<Receiver, Receiver2> &&
                std::is_nothrow_constructible_v<Predicate, Predicate2> &&
                std::is_nothrow_constructible_v<Source, Source2> &&
-               is_nothrow_connectable_v<Source&, _receiver_t>)
+               is_nothrow_connectable_v<Source&, receiver_t<Source, Predicate, Receiver>>)
   : source_((Source2&&)source)
   , predicate_((Predicate2&&)predicate)
   , receiver_((Receiver2&&)dest)
+  , stop_(unifex::get_stop_token(receiver_))
   {
     sourceOp_.construct_with([&] {
-        return unifex::connect(source_, _receiver_t{this});
+        return unifex::connect(source_, receiver_t<Source, Predicate, Receiver>{this});
       });
   }
 
@@ -168,18 +228,24 @@ public:
     }
   }
 
-  void start() & noexcept {
-    unifex::start(sourceOp_.get());
+
+  template(typename... Args)
+    (requires (sizeof...(Args) == 0))
+  auto start(Args...) & noexcept {
+    return unifex::start(sourceOp_.get());
   }
 
 private:
-  friend _receiver_t;
+  friend receiver_t<Source, Predicate, Receiver>;
+  friend struct _tail_start<Source, Predicate, Receiver>::type;
+  friend struct _tail_restart<Source, Predicate, Receiver>::type;
 
-  using source_op_t = connect_result_t<Source&, _receiver_t>;
+  using source_op_t = connect_result_t<Source&, receiver_t<Source, Predicate, Receiver>>;
 
   UNIFEX_NO_UNIQUE_ADDRESS Source source_;
   UNIFEX_NO_UNIQUE_ADDRESS Predicate predicate_;
   UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
+  _stop_token_t stop_;
   bool isSourceOpConstructed_ = true;
   manual_lifetime<source_op_t> sourceOp_;
 };

@@ -271,39 +271,85 @@ namespace unifex {
       _recursive_tail_callable =
         UNIFEX_FRAGMENT(unifex::_recursive_tail_callable_invoke, T, ValidTailCallable...);
 
+
+    struct null_tail_callable;
+
+    template<typename T>
+    using next_tail_callable_t = decltype(std::declval<const T&>().invoke());
+
+    template<typename T>
+    UNIFEX_CONCEPT 
+      _nullable_tail_callable =
+        default_initializable<T> &&
+        nothrow_contextually_convertible_to_bool<T>;
+
+    template<typename... Cs>
+    struct _variant_tail_callable;
+
     // This handles the potential for recursion 
     struct _has_tail_callable_invoke_impl {
 
-        template(typename T, typename... ValidTailCallable)
+        template(typename T, typename... PrevTailCallables)
             (requires
-                (!_terminal_tail_callable<T>) &&
-                (!_recursive_tail_callable<T, ValidTailCallable...>) &&
-                (!_tail_callable_invoke_impl<T>))
+                (!std::is_void_v<T>) AND
+                (!same_as<null_tail_callable, T>) AND
+                (!_recursive_tail_callable<T, PrevTailCallables...>) AND
+                (!_tail_callable_impl<T>))
         static inline constexpr bool _value() noexcept { return false; }
 
-        template(typename T, typename... ValidTailCallable)
+        template(typename T, typename... PrevTailCallables)
             (requires
-                (!_terminal_tail_callable<T>) &&
-                (!_recursive_tail_callable<T, ValidTailCallable...>) &&
-                _tail_callable_invoke_impl<T>)
+                (!std::is_void_v<T>) AND
+                (!same_as<null_tail_callable, T>) AND
+                (!_recursive_tail_callable<T, PrevTailCallables...>) AND
+                _tail_callable_impl<T>)
         static inline constexpr bool _value() noexcept {
-            return _value<decltype(std::declval<const T&>().invoke()), T, ValidTailCallable...>();
+            return _has_tail_callable_invoke_impl::_value<next_tail_callable_t<T>, T, PrevTailCallables...>();
         }
 
-        template(typename T, typename... ValidTailCallable)
-            (requires _terminal_tail_callable<T>)
+        template(typename T, typename... PrevTailCallables)
+            (requires 
+                std::is_void_v<T> AND
+                (!same_as<null_tail_callable, T>) AND
+                (!_recursive_tail_callable<T, PrevTailCallables...>) AND
+                (!_tail_callable_impl<T>))
         static inline constexpr bool _value() noexcept { return true; }
 
-        template(typename T, typename... ValidTailCallable)
-            (requires _recursive_tail_callable<T, ValidTailCallable...>)
+        template(typename T, typename... PrevTailCallables)
+            (requires 
+                (!std::is_void_v<T>) AND
+                same_as<null_tail_callable, remove_cvref_t<T>> AND
+                (!_recursive_tail_callable<T, PrevTailCallables...>) AND
+                _tail_callable_impl<T>)
         static inline constexpr bool _value() noexcept { return true; }
 
-        template<typename T, typename... ValidTailCallable>
-        static inline constexpr bool value = _value<T, ValidTailCallable...>();
+        template(typename T, typename... PrevTailCallables)
+            (requires 
+                (!std::is_void_v<T>) AND
+                (!same_as<null_tail_callable, T>) AND
+                _recursive_tail_callable<T, PrevTailCallables...> AND
+                _tail_callable_impl<T>)
+        static inline constexpr bool _value() noexcept { return true; }
+
+        template<typename... Cs, typename... PrevTailCallables>
+        static inline constexpr bool _variant_value(_variant_tail_callable<Cs...>*) noexcept {
+            return _has_tail_callable_invoke_impl::_value<Cs..., _variant_tail_callable<Cs...>, PrevTailCallables...>();
+        }
+
+        template(typename T, typename... PrevTailCallables)
+            (requires 
+                (!std::is_void_v<T>) AND
+                (!same_as<null_tail_callable, T>) AND
+                (!_recursive_tail_callable<T, PrevTailCallables...>) AND
+                _tail_callable_impl<T>)
+        static inline constexpr auto _value() noexcept 
+          -> decltype(_has_tail_callable_invoke_impl::_variant_value<T, PrevTailCallables...>(static_cast<T*>(nullptr))) {
+            return _has_tail_callable_invoke_impl::_variant_value<T, PrevTailCallables...>(static_cast<T*>(nullptr));
+        }
     };
 
-    template<typename T, typename... ValidTailCallable>
-    inline constexpr bool _has_tail_callable_invoke = _has_tail_callable_invoke_impl::template value<T, ValidTailCallable...>;
+    template<typename T, typename... PrevTailCallables>
+    inline constexpr bool _has_tail_callable_invoke = _has_tail_callable_invoke_impl::template _value<T, PrevTailCallables...>();
 
     template<typename T>
     UNIFEX_CONCEPT 
@@ -317,8 +363,7 @@ namespace unifex {
     UNIFEX_CONCEPT 
       nullable_tail_callable =
         tail_callable<T> &&
-        default_initializable<T> &&
-        nothrow_contextually_convertible_to_bool<T>;
+        _nullable_tail_callable<T>;
 
     struct any_tail_callable {
         using invoke_fn = any_tail_callable(void*) noexcept;
@@ -345,8 +390,12 @@ namespace unifex {
     struct null_tail_callable {
         operator any_tail_callable() const noexcept { return any_tail_callable(); }
         constexpr explicit operator bool() const noexcept { return false; }
-        [[noreturn]] void destroy() const noexcept { std::terminate(); }
-        [[noreturn]] void invoke() const noexcept { std::terminate(); }
+        [[noreturn]] void destroy() const noexcept {
+            std::terminate();
+        }
+        [[noreturn]] void invoke() const noexcept {
+            std::terminate();
+        }
     };
 
     template(typename C)
@@ -360,43 +409,80 @@ namespace unifex {
         }
     }
 
-    template(typename C, typename... Prev)
-      (requires tail_callable<C> && all_true<tail_callable<Prev>...>)
-    auto _resume_sequential(C c, type_list<Prev...>) {
-        if constexpr (terminal_tail_callable<C>) {
+    template(typename C)
+      (requires tail_callable<C>)
+    auto _invoke_until_nullable(C c) {
+        if constexpr (nullable_tail_callable<C>) {
+            return c;
+        } else if constexpr (_terminal_tail_callable<C>) {
             c.invoke();
             return null_tail_callable{};
         } else {
-            auto c2 = c.invoke();
-            if constexpr (one_of<decltype(c2), C, Prev...>) {
-                static_assert((nullable_tail_callable<C> || (nullable_tail_callable<Prev> || ...)),
-                    "At least one tail_callable must be nullable to avoid entering an infinite loop");
-                return _resume_until_nullable(c2);
-            } else if constexpr (nullable_tail_callable<decltype(c2)>) {
-                using result_type = decltype(_resume_sequential(c2, type_list<C, Prev...>{}));
-                if constexpr (same_as<result_type, decltype(c2)>) {
-                    // Let the loop in resume_tail_callable handle checking the boolean.
-                    return c2;
-                } else {
-                    static_assert(nullable_tail_callable<result_type>);
-                    if (c2) {
-                        return _resume_sequential(c2, type_list<C, Prev...>{});
-                    } else {
-                        return result_type{};
-                    }
-                }
+            return _invoke_until_nullable(c.invoke());
+        }
+    }
+
+    template<typename C, typename... Prev>
+    auto _invoke_sequential(C c, type_list<Prev...>) {
+        static_assert(tail_callable<C>, "_invoke_sequential: must be called with a tail_callable");
+        if constexpr (_terminal_tail_callable<C>) {
+            if constexpr (nullable_tail_callable<C>) {
+                return c;
             } else {
-                return _resume_sequential(c2, type_list<C, Prev...>{});
+                c.invoke();
+                return null_tail_callable{};
             }
+        } else {
+          auto next = c.invoke();
+          using next_t = decltype(next);
+          if constexpr (one_of<next_t, C, Prev...>) {
+              static_assert((nullable_tail_callable<C> || (nullable_tail_callable<Prev> || ...)),
+                  "At least one tail_callable in a cycle must be nullable to avoid entering an infinite loop");
+              return _invoke_until_nullable(next);
+          } else {
+              using result_type = decltype(_invoke_sequential(next, type_list<C, Prev...>{}));    
+              if constexpr (same_as<result_type, next_t>) {
+                  // Let the loop in resume_tail_callable() handle checking the boolean.
+                  return next;
+              } else {
+                  if constexpr (nullable_tail_callable<next_t>) {
+                      if (!next) {
+                          return result_type{};
+                      }
+                  }
+                  return _invoke_sequential(next, type_list<C, Prev...>{});
+              }
+          }
         }
     }
 
     template(typename C)
       (requires tail_callable<C>)
+    auto _invoke_sequential(C c) {
+        static_assert(tail_callable<C>, "_invoke_sequential: must be called with a tail_callable");
+        return _invoke_sequential(c, type_list<>{});
+    }
+
+
+    template(typename C)
+      (requires tail_callable<C>)
     void resume_tail_callable(C c) {
-        auto c2 = _resume_sequential(c, type_list<>{});
+        static_assert(nullable_tail_callable<decltype(_invoke_sequential(c))>, "resume_tail_callable: _invoke_sequential must return a nullable_tail_callable");
+        auto c2 = _invoke_sequential(c);
         while (c2) {
-            c2 = _resume_sequential(c2, type_list<>{});
+            c2 = _invoke_sequential(c2, type_list<>{});
+        }
+    }
+
+    template(typename... Cs)
+      (requires all_true<tail_callable<Cs>...>)
+    void resume_tail_callables(Cs... cs) {
+        static_assert(all_true<nullable_tail_callable<decltype(_invoke_sequential(cs))>...>, "resume_tail_callables: _invoke_sequential must return a nullable_tail_callable");
+        auto c2sTuple = std::make_tuple(_invoke_sequential(cs)...);
+        while (std::apply([](auto... c2s) noexcept { return (c2s || ...); }, c2sTuple)) {
+            c2sTuple = std::apply([](auto... c2s) noexcept {
+                return std::make_tuple(_invoke_sequential(c2s)...);
+            }, c2sTuple);
         }
     }
 
@@ -442,9 +528,6 @@ namespace unifex {
     using first_nullable_tail_callable_t = typename _first_nullable_tail_callable::type<Cs...>;
 
 
-    template<typename... Cs>
-    struct _variant_tail_callable;
-
     template<typename C>
     struct _flatten_variant_element {
         using type = type_list<C>;
@@ -470,13 +553,23 @@ namespace unifex {
         using type = null_tail_callable;
     };
 
-    template<typename... Cs>
-    using variant_tail_callable = typename concat_type_lists_unique_t<
-        typename _flatten_variant_element<Cs>::type...>::template apply<_variant_or_single>::type;
-
     template<typename T>
     using replace_void_with_null_tail_callable =
         std::conditional_t<std::is_void_v<T>, null_tail_callable, T>;
+
+    template<typename... Cs>
+    using variant_tail_callable = typename concat_type_lists_unique_t<
+        typename _flatten_variant_element<replace_void_with_null_tail_callable<Cs>>::type...>::template apply<_variant_or_single>::type;
+
+    template<typename CPO, typename Target, typename... Args>
+    auto result_or_null_tail_callable(CPO cpo, Target&& t, Args&&... args) {
+      if constexpr (std::is_void_v<callable_result_t<CPO, Target, Args...>>) {
+        cpo((Target&&)t, (Args&&)args...);
+        return null_tail_callable{};
+      } else {
+        return cpo((Target&&)t, (Args&&)args...);
+      }
+    }
 
     template<typename... Cs>
     struct _variant_tail_callable {
@@ -484,14 +577,14 @@ namespace unifex {
         static_assert(types_are_unique_v<Cs...>);
 
         _variant_tail_callable() noexcept
-        : _variant_tail_callable(first_nullable_tail_callable_t<Cs...>{})
+        : _variant_tail_callable(first_nullable_tail_callable_t<replace_void_with_null_tail_callable<Cs>...>{})
         {
         }
 
         template(typename C)
-          (requires one_of<C, Cs...>)
+          (requires one_of<C, replace_void_with_null_tail_callable<Cs>...>)
         _variant_tail_callable(C c) noexcept
-        : tag(index_of_v<C, Cs...>) {
+        : tag(index_of_v<C, replace_void_with_null_tail_callable<Cs>...>) {
             state.template construct<C>(c);
         }
 
@@ -499,15 +592,16 @@ namespace unifex {
         _variant_tail_callable& operator=(const _variant_tail_callable&) noexcept = default;
 
         template(typename... OtherCs)
-            (requires  (one_of<OtherCs, Cs...> && ...))
+            (requires  all_true<one_of<replace_void_with_null_tail_callable<OtherCs>, replace_void_with_null_tail_callable<Cs>...>...>)
         _variant_tail_callable(_variant_tail_callable<OtherCs...> c) noexcept {
             c.visit([this](auto other_c) noexcept {
                 *this = _variant_tail_callable(other_c);
             });
         }
 
+        template(typename... Args)
+          (requires (contextually_convertible_to_bool<Cs> || ... ) && (sizeof...(Args) == 0))
         explicit operator bool() const noexcept {
-            // requires (contextually_convertible_to_bool<Cs> || ... ) {
             bool result = true;
             visit([&result](auto c) noexcept {
                 if constexpr (contextually_convertible_to_bool<decltype(c)>) {
@@ -518,23 +612,26 @@ namespace unifex {
             return result;
         }
 
-        auto invoke() const noexcept {
-            using result_tail_callable = variant_tail_callable<
-                replace_void_with_null_tail_callable<decltype(std::declval<Cs>().invoke())>...>;
-            manual_lifetime<result_tail_callable> result;
-            visit([&result](auto c) noexcept {
+        template(typename... Args)
+          (requires (sizeof...(Args) == 0))
+        auto invoke(Args...) const noexcept {
+            using invoke_result_tail_callable = variant_tail_callable<
+                null_tail_callable,
+                decltype(std::declval<replace_void_with_null_tail_callable<Cs>>().invoke())...>;
+            return visit([](auto c) noexcept -> invoke_result_tail_callable {
                 if constexpr (_terminal_tail_callable<decltype(c)>) {
+                    static_assert(std::is_void_v<decltype(c.invoke())>);
                     c.invoke();
-                    result.construct(null_tail_callable{});
+                    return {null_tail_callable{}};
                 } else {
-                    auto next = c.invoke();
-                    result.construct(next);
+                    return {c.invoke()};
                 }
             });
-            return result.get();
         }
 
-        void destroy() const noexcept {
+        template(typename... Args)
+          (requires (sizeof...(Args) == 0))
+        void destroy(Args...) const noexcept {
             visit([](auto c) { c.destroy(); });
         }
 
@@ -543,29 +640,56 @@ namespace unifex {
         friend struct _variant_tail_callable;
 
         template<typename F>
-        void visit(F f) const noexcept {
-            visit_impl(std::move(f), std::index_sequence_for<Cs...>{});
+        auto visit(F f) const noexcept {
+            return visit_impl(std::move(f), std::index_sequence_for<Cs...>{});
         }
 
         template<typename F, std::size_t Idx, std::size_t... Indices>
-        void visit_impl(F f, std::index_sequence<Idx, Indices...>) const noexcept {
-            using T = nth_type_t<Idx, Cs...>;
+        auto visit_impl(F f, std::index_sequence<Idx, Indices...>) const noexcept {
+            using T = nth_type_t<Idx, replace_void_with_null_tail_callable<Cs>...>;
             if constexpr (sizeof...(Indices) == 0) {
-                f(state.template get<T>());
+                return f(state.template get<T>());
             } else if (tag == Idx) {
-                f(state.template get<T>());
+                return f(state.template get<T>());
             } else {
-                visit_impl(std::move(f), std::index_sequence<Indices...>{});
+                return visit_impl(std::move(f), std::index_sequence<Indices...>{});
             }
         }
         
         std::size_t tag;
-        manual_lifetime_union<Cs...> state;
+        manual_lifetime_union<replace_void_with_null_tail_callable<Cs>...> state;
     };
 
-    template<typename... Ts, typename... ValidTailCallable>
-    inline constexpr bool _has_tail_callable_invoke<_variant_tail_callable<Ts...>, ValidTailCallable...> =
-        (_has_tail_callable_invoke<Ts, _variant_tail_callable<Ts...>, ValidTailCallable...> && ...);
+    inline constexpr null_tail_callable resume_tail_callables_until_one_remaining() noexcept {
+        return {};
+    }
+
+    template(typename C)
+      (requires tail_callable<C>)
+    C resume_tail_callables_until_one_remaining(C c) noexcept {
+        return c;
+    }
+
+    template(typename C0, typename C1, typename... Cs)
+      (requires tail_callable<C0> && tail_callable<C1> && all_true<tail_callable<Cs>...>)
+    auto resume_tail_callables_until_one_remaining(C0 c0, C1 c1, Cs... cs) noexcept {
+        using result_type = variant_tail_callable<decltype(_invoke_sequential(c0)), decltype(_invoke_sequential(c1)), decltype(_invoke_sequential(cs))...>;
+        result_type result;
+
+        auto cs2_tuple = std::make_tuple(_invoke_sequential(c0), _invoke_sequential(c1), _invoke_sequential(cs)...);
+        while (true) {
+            std::size_t remaining = sizeof...(cs) + 2;
+            std::apply([&](auto&... c2s) noexcept {
+                (
+                    (c2s ? (void)(result = c2s = _invoke_sequential(c2s)) : (void)--remaining), ...
+                );
+            }, cs2_tuple);
+
+            if (remaining <= 1) {
+                return result;
+            }
+        }
+    }
 
     template(typename C)
       (requires tail_callable<C>)

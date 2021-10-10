@@ -43,16 +43,34 @@ struct _op<Receiver, Values...>::type {
   UNIFEX_NO_UNIQUE_ADDRESS std::tuple<Values...> values_;
   UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
 
-  void start() & noexcept {
+  using tail_t = variant_tail_callable<
+      null_tail_callable,
+      callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>,
+      callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
+
+  tail_t start() & noexcept {
     UNIFEX_TRY {
-      std::apply(
-          [&](Values&&... values) {
-            unifex::set_value((Receiver &&) receiver_, (Values &&) values...);
+      return {std::apply(
+          [&](Values&&... values) -> tail_t {
+            using tail = callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>;
+            if constexpr (sender<tail>) {static_assert(sender<tail>, "just: sender not yet supported");}
+            else if constexpr (tail_callable<tail>) {
+              return result_or_null_tail_callable(unifex::set_value, (Receiver &&) receiver_, (Values &&) values...);
+            } else {
+              static_assert(!tail_callable<tail>, "just: unsupported set_value return type");
+            }
           },
-          std::move(values_));
+          std::move(values_))};
     } UNIFEX_CATCH (...) {
-      unifex::set_error((Receiver &&) receiver_, std::current_exception());
+      using tail = callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>;
+      if constexpr (sender<tail>) {static_assert(sender<tail>, "just: sender not yet supported");}
+      else if constexpr (tail_callable<tail>) {
+        return {result_or_null_tail_callable(unifex::set_error, (Receiver &&) receiver_, std::current_exception())};
+      } else {
+        static_assert(!tail_callable<tail>, "just: unsupported set_error return type");
+      }
     }
+    return {null_tail_callable{}};
   }
 };
 

@@ -77,8 +77,8 @@ class _op<CPO, Value, Sender, Receiver>::type {
                   receiver_wrapper<CPO, Value, Receiver>{
                       (Receiver2 &&) receiver, value_})) {}
 
-  void start() & noexcept {
-    unifex::start(innerOp_);
+  auto start() & noexcept {
+    return unifex::start(innerOp_);
   }
 
  private:

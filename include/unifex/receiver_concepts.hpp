@@ -18,8 +18,8 @@
 #include <unifex/config.hpp>
 #include <unifex/tag_invoke.hpp>
 #include <unifex/type_traits.hpp>
-#include <unifex/std_concepts.hpp>
 #include <unifex/detail/unifex_fwd.hpp>
+#include <unifex/tail_callable_concepts.hpp>
 
 #include <exception>
 #include <type_traits>

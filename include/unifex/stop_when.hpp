@@ -163,6 +163,32 @@ namespace unifex
     };
 
     template <typename Source, typename Trigger, typename Receiver>
+    struct _tail_start {
+      class type {
+      public:
+        using op_t = typename _op<Source, Trigger, Receiver>::type;
+        op_t* op_;
+        auto invoke() const noexcept {
+          return resume_tail_callables_until_one_remaining(
+            result_or_null_tail_callable(unifex::start, op_->sourceOp_),
+            result_or_null_tail_callable(unifex::start, op_->triggerOp_));
+        }
+        void destroy() const noexcept {
+          using tail = callable_result_t<tag_t<unifex::set_done>, Receiver>;
+          if constexpr (sender<tail>) {
+            static_assert(sender<tail>, "stop_when: sender not yet supported");
+          } else if constexpr (tail_callable<tail>) {
+            resume_tail_callable(unifex::set_done(std::move(op_->receiver_)));
+          } else if constexpr (std::is_void_v<tail>) {
+            unifex::set_done(std::move(op_->receiver_));
+          } else {
+            static_assert(!std::is_void_v<tail>, "stop_when: unsupported set_done result");
+          }
+        }
+      };
+    };
+
+    template <typename Source, typename Trigger, typename Receiver>
     class _op<Source, Trigger, Receiver>::type {
       using source_receiver =
           stop_when_source_receiver<Source, Trigger, Receiver>;
@@ -183,16 +209,15 @@ namespace unifex
         , triggerOp_(
               unifex::connect((Trigger &&) trigger, trigger_receiver{this})) {}
 
-      void start() & noexcept {
+      typename _tail_start<Source, Trigger, Receiver>::type start() & noexcept {
         stopCallback_.emplace(get_stop_token(receiver_), cancel_callback{this});
-
-        unifex::start(sourceOp_);
-        unifex::start(triggerOp_);
+        return {this};
       }
 
     private:
       friend class _srcvr<Source, Trigger, Receiver>::type;
       friend class _trcvr<Source, Trigger, Receiver>::type;
+      friend class _tail_start<Source, Trigger, Receiver>::type;
 
       class cancel_callback {
       public:
