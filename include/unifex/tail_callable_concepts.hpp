@@ -474,18 +474,6 @@ namespace unifex {
         }
     }
 
-    template(typename... Cs)
-      (requires all_true<tail_callable<Cs>...>)
-    void resume_tail_callables(Cs... cs) {
-        static_assert(all_true<nullable_tail_callable<decltype(_invoke_sequential(cs))>...>, "resume_tail_callables: _invoke_sequential must return a nullable_tail_callable");
-        auto c2sTuple = std::make_tuple(_invoke_sequential(cs)...);
-        while (std::apply([](auto... c2s) noexcept { return (c2s || ...); }, c2sTuple)) {
-            c2sTuple = std::apply([](auto... c2s) noexcept {
-                return std::make_tuple(_invoke_sequential(c2s)...);
-            }, c2sTuple);
-        }
-    }
-
     template(typename C)
         (requires tail_callable<C> && (!nullable_tail_callable<C>))
     struct maybe_tail_callable {
@@ -660,7 +648,7 @@ namespace unifex {
         manual_lifetime_union<replace_void_with_null_tail_callable<Cs>...> state;
     };
 
-    inline constexpr null_tail_callable resume_tail_callables_until_one_remaining() noexcept {
+    inline null_tail_callable resume_tail_callables_until_one_remaining() noexcept {
         return {};
     }
 
@@ -670,25 +658,34 @@ namespace unifex {
         return c;
     }
 
-    template(typename C0, typename C1, typename... Cs)
-      (requires tail_callable<C0> && tail_callable<C1> && all_true<tail_callable<Cs>...>)
-    auto resume_tail_callables_until_one_remaining(C0 c0, C1 c1, Cs... cs) noexcept {
-        using result_type = variant_tail_callable<decltype(_invoke_sequential(c0)), decltype(_invoke_sequential(c1)), decltype(_invoke_sequential(cs))...>;
+    template(typename... Cs, std::size_t... Is)
+      (requires all_true<tail_callable<Cs>...>)
+    UNIFEX_ALWAYS_INLINE
+    auto _resume_tail_callables_until_one_remaining(std::index_sequence<Is...>, Cs... cs) noexcept {
+        using result_type = variant_tail_callable<decltype(_invoke_sequential(cs))...>;
         result_type result;
-
-        auto cs2_tuple = std::make_tuple(_invoke_sequential(c0), _invoke_sequential(c1), _invoke_sequential(cs)...);
+        
+        auto cs2_tuple = std::make_tuple(_invoke_sequential(cs)...);
         while (true) {
-            std::size_t remaining = sizeof...(cs) + 2;
-            std::apply([&](auto&... c2s) noexcept {
-                (
-                    (c2s ? (void)(result = c2s = _invoke_sequential(c2s)) : (void)--remaining), ...
-                );
-            }, cs2_tuple);
+            std::size_t remaining = sizeof...(cs);
+            (
+                (remaining > 1 ?
+                    (std::get<Is>(cs2_tuple) ?
+                        (void)(result = std::get<Is>(cs2_tuple) = _invoke_sequential(std::get<Is>(cs2_tuple))) :
+                        (void)--remaining) :
+                    (void)(result = std::get<Is>(cs2_tuple))), ...
+            );
 
             if (remaining <= 1) {
                 return result;
             }
         }
+    }
+
+    template(typename... Cs)
+      (requires all_true<tail_callable<Cs>...>)
+    auto resume_tail_callables_until_one_remaining(Cs... cs) noexcept {
+        return _resume_tail_callables_until_one_remaining(std::index_sequence_for<Cs...>{}, cs...);
     }
 
     template(typename C)

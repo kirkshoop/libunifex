@@ -207,3 +207,23 @@ TEST(TailCallable, Forks) {
   EXPECT_EQ(result, "[~FC1]");
   }
 }
+
+TEST(TailCallable, Interleave) {
+  {
+  std::string result;
+  State s0{3, &result};
+  State s1{0, &result};
+  resume_tail_callables_until_one_remaining(State::FC1{&s0}, State::FC1{&s1});
+  std::cout << "result: " << result << "\n";
+  EXPECT_EQ(result, "[FC1][FC2][FC3][FC1][FC2][FC4][FC2][FC3]");
+  }
+
+  {
+  std::string result;
+  State s0{3, &result};
+  State s1{0, &result};
+  resume_tail_callables_until_one_remaining(C4{&result}, State::FC1{&s0}, RC5{&result, false}, State::FC1{&s1});
+  std::cout << "result: " << result << "\n";
+  EXPECT_EQ(result, "[C4][==C3][C3][C2][C1][FC1][FC2][FC3][RC5][RC4][RC3][FC1][FC2][FC4][FC2][FC3][==RC2][RC2][RC1][RC3][FC4][==RC2]");
+  }
+}
