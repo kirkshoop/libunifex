@@ -20,6 +20,18 @@ else()
   set(UNIFEX_NO_COROUTINES TRUE)
 endif()
 
+# Probe for range-v3
+find_package(RangeV3 COMPONENTS Final)
+# Set some variables to be used by configure_file.
+if(range-v3_FOUND)
+  set(UNIFEX_NO_RANGES FALSE)
+  set(UNIFEX_RANGES_INCLUDE_DIRS ${range-v3_INCLUDE_DIR})
+  set(UNIFEX_RANGES_NAMESPACE ranges)
+else()
+  message(WARNING "[unifex warning]: did not find ranges library")
+  set(UNIFEX_NO_RANGES TRUE)
+endif()
+
 # Probe for memory_resource support
 find_package(MemoryResource COMPONENTS Experimental Final)
 # Set some variables to be used by configure_file.
