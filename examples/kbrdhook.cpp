@@ -22,6 +22,7 @@
 #include <unifex/then.hpp>
 #include <unifex/stop_when.hpp>
 #include <unifex/let_value.hpp>
+#include <unifex/with_query_value.hpp>
 #include <unifex/repeat_effect_until.hpp>
 #include <unifex/range.hpp>
 
@@ -201,7 +202,152 @@ create_event_sender_range(RegisterFn&& registerFn, UnregisterFn&& unregisterFn) 
 }
 
 #include <windows.h>
+#include <windowsx.h>
 #include <winuser.h>
+#include <mfplay.h>
+#include <mferror.h>
+#include <shobjidl.h>   // defines IFileOpenDialog
+#include <Shlwapi.h>
+#include <strsafe.h>
+
+#pragma comment(lib, "mfplay.lib")
+#pragma comment(lib, "shlwapi.lib")
+
+struct Player;
+
+class MediaPlayerCallback : public IMFPMediaPlayerCallback
+{
+    Player* player_;
+    long m_cRef; // Reference count
+
+public:
+
+    explicit MediaPlayerCallback(Player* player) : player_(player), m_cRef(1)
+    {
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv)
+    {
+        static const QITAB qit[] = 
+        {
+            QITABENT(MediaPlayerCallback, IMFPMediaPlayerCallback),
+            { 0 },
+        };
+        return QISearch(this, qit, riid, ppv);
+    }
+    STDMETHODIMP_(ULONG) AddRef() 
+    {
+            return InterlockedIncrement(&m_cRef); 
+    }
+    STDMETHODIMP_(ULONG) Release()
+    {
+        ULONG count = InterlockedDecrement(&m_cRef);
+        if (count == 0)
+        {
+            delete this;
+            return 0;
+        }
+        return count;
+    }
+
+    // IMFPMediaPlayerCallback methods
+    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER *pEventHeader);
+};
+
+struct Player {
+    IMFPMediaPlayer         *pPlayer = NULL;      // The MFPlay player object.
+    MediaPlayerCallback     *pPlayerCB = NULL;    // Application callback object.
+
+    Player() : pPlayer(nullptr), pPlayerCB(new MediaPlayerCallback(this)) {
+        HRESULT hr = MFPCreateMediaPlayer(
+            NULL,
+            FALSE,          // Start playback automatically?
+            0,              // Flags
+            pPlayerCB,      // Callback pointer
+            NULL,           // Video window
+            &pPlayer
+            );
+        if(FAILED(hr)) {
+            std::terminate();
+        }
+
+        // Create a new media item for this URL.
+        hr = pPlayer->CreateMediaItemFromURL(L"https://webwit.nl/input/kbsim/mp3/1_.mp3", FALSE, 0, NULL);
+        if(FAILED(hr)) {
+            std::terminate();
+        }
+    }
+
+    void Click() {
+        HRESULT hr = pPlayer->Stop(); 
+        if (FAILED(hr)) {std::terminate();}
+        hr = pPlayer->Play(); 
+        if (FAILED(hr)) {std::terminate();}
+
+        printf(".");
+        fflush(stdout);
+    }
+
+    void ShowErrorMessage(PCWSTR format, HRESULT hrErr) {
+        HRESULT hr = S_OK;
+        WCHAR msg[MAX_PATH];
+
+        hr = StringCbPrintfW(msg, sizeof(msg), L"%s (hr=0x%X)", format, hrErr);
+
+        if (SUCCEEDED(hr))
+        {
+            MessageBoxW(NULL, msg, L"Error", MB_ICONERROR);
+        }
+    }
+
+    void OnMediaItemCreated(MFP_MEDIAITEM_CREATED_EVENT *pEvent) {
+        HRESULT hr = S_OK;
+
+        // The media item was created successfully.
+
+        if (pPlayer)
+        {
+            // Set the media item on the player. This method completes asynchronously.
+            hr = pPlayer->SetMediaItem(pEvent->pMediaItem);
+        }
+
+        if (FAILED(hr))
+        {
+            ShowErrorMessage(L"Error playing this file.", hr);
+        }
+    }
+
+    void OnMediaItemSet(MFP_MEDIAITEM_SET_EVENT * /*pEvent*/) 
+    {
+        HRESULT hr = S_OK;
+
+        hr = pPlayer->Play();
+
+        if (FAILED(hr))
+        {
+            ShowErrorMessage(L"IMFPMediaPlayer::Play failed.", hr);
+        }
+    }
+};
+
+void STDMETHODCALLTYPE MediaPlayerCallback::OnMediaPlayerEvent(MFP_EVENT_HEADER *pEventHeader)
+{
+    if (FAILED(pEventHeader->hrEvent)) {
+    player_->ShowErrorMessage(L"Playback error", pEventHeader->hrEvent);
+    return;
+    }
+
+    switch (pEventHeader->eEventType)
+    {
+    case MFP_EVENT_TYPE_MEDIAITEM_CREATED:
+        player_->OnMediaItemCreated(MFP_GET_MEDIAITEM_CREATED_EVENT(pEventHeader));
+        break;
+
+    case MFP_EVENT_TYPE_MEDIAITEM_SET:
+        player_->OnMediaItemSet(MFP_GET_MEDIAITEM_SET_EVENT(pEventHeader));
+        break;
+    }
+}
 
 template<typename Fn, typename StopToken>
 struct kbdhookstate {
@@ -289,31 +435,43 @@ struct kbdhookstate {
   }
 };
 
-int main() {
+int wmain() {
   unifex::timed_single_thread_context context;
   unifex::inplace_stop_source stopSource;
 
-  auto eventRangeFactory = create_event_sender_range<WPARAM>(
-      [&](auto& fn) noexcept {
+    if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
+    {
+        return 0;
+    }
+
+    Player player;
+
+    auto eventRangeFactory = create_event_sender_range<WPARAM>(
+        [&](auto& fn) noexcept {
         return kbdhookstate<decltype(fn), decltype(stopSource.get_token())>{
             fn, stopSource.get_token()};
-      },
-      [](auto& r) noexcept { r.join(); });
+        },
+        [](auto& r) noexcept { r.join(); });
 
-  int remaining = 5;
-  auto timeout = unifex::stop_when(unifex::schedule_at(context.get_scheduler(), unifex::now(context.get_scheduler()) + 5s));
-  for (auto next : eventRangeFactory.start(stopSource.get_token())) {
-    if (remaining-- == 0) {
-      stopSource.request_stop();
-    }
-    auto evt = unifex::sync_wait(next | timeout);
-    if (!evt) {
-      break;
-    }
-    printf(".");
-    fflush(stdout);
-  }
 
-  printf("\nexit\n");
+    for (auto next : eventRangeFactory.start(stopSource.get_token())) {
+        auto evt = unifex::sync_wait(
+            unifex::stop_when(
+                unifex::with_query_value(next, unifex::get_stop_token, stopSource.get_token()),
+                unifex::repeat_effect(
+                    unifex::then(unifex::schedule(), []{
+                            MSG msg{};
+                            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)){
+                              DispatchMessageW(&msg);
+                            }
+                }))
+            ));
+        if (!evt) {
+            break;
+        }
+        player.Click();
+    }
+
+    printf("\nexit\n");
 
 }
