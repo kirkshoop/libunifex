@@ -141,19 +141,26 @@ create_event_sender_range(RegisterFn&& registerFn, UnregisterFn&& unregisterFn) 
 }
 
 
-template<typename Fn>
+template<typename Fn, typename StopToken>
 struct kbdhookstate {
   Fn& fn_;
+  StopToken token_;
   HHOOK hHook_;
   std::thread msgThread_;
 
-  static inline void* self_{nullptr};
+  static inline std::atomic<kbdhookstate<Fn, StopToken>*> self_{nullptr};
 
-  explicit kbdhookstate(Fn& fn)
+  explicit kbdhookstate(Fn& fn, StopToken token)
     : fn_(fn)
+    , token_(token)
     , hHook_(NULL)
-    , msgThread_([](kbdhookstate<Fn>* self) noexcept {
-            kbdhookstate<Fn>::self_ = self;
+    , msgThread_(
+          [](kbdhookstate<Fn, StopToken>* self) noexcept {
+            kbdhookstate<Fn, StopToken>* empty = nullptr;
+            if (!kbdhookstate<Fn, StopToken>::self_.compare_exchange_strong(
+                    empty, self)) {
+              std::terminate();
+            }
 
             self->hHook_ = SetWindowsHookExW(
                 WH_KEYBOARD_LL,
@@ -174,28 +181,44 @@ struct kbdhookstate {
 
               printf("failed to set keyboard hook\n");
               printf("Error: %S\n", message);
+              LocalFree((HLOCAL)message);
               std::terminate();
             }
             printf("keyboard hook set\n");
 
             MSG msg{};
-            while (GetMessageW(&msg, NULL, 0, 0)) {
+            while (GetMessageW(&msg, NULL, 0, 0) && !self->token_.stop_requested()) {
               DispatchMessageW(&msg);
+            }
+
+            bool result = UnhookWindowsHookEx(std::exchange(self->hHook_, (HHOOK)NULL));
+            if (!result) {
+              std::terminate();
+            }
+
+            kbdhookstate<Fn, StopToken>* expired = self;
+            if (!kbdhookstate<Fn, StopToken>::self_.compare_exchange_strong(
+                    expired, nullptr)) {
+              std::terminate();
             }
           },
           this) {
-    self_ = this;
+  }
+
+  void join() {
+    PostThreadMessageW(GetThreadId(msgThread_.native_handle()), WM_QUIT, 0, 0L);
+    msgThread_.join();
   }
 
   static
   LRESULT CALLBACK
   KbdHookProc(_In_ int nCode, _In_ WPARAM wParam, _In_ LPARAM lParam) {
-    if (!!kbdhookstate<Fn>::self_ && nCode >= 0 &&
+    kbdhookstate<Fn, StopToken>* self =
+        kbdhookstate<Fn, StopToken>::self_.load();
+    if (!!self && nCode >= 0 &&
         (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
-      auto& self =
-          *reinterpret_cast<kbdhookstate<Fn>*>(kbdhookstate<Fn>::self_);
-      self.fn_(wParam);
-      return CallNextHookEx(self.hHook_, nCode, wParam, lParam);
+      self->fn_(wParam);
+      return CallNextHookEx(self->hHook_, nCode, wParam, lParam);
     }
     return CallNextHookEx(NULL, nCode, wParam, lParam);
   }
@@ -206,16 +229,22 @@ int main() {
   unifex::inplace_stop_source stopSource;
 
   auto eventRangeFactory = create_event_sender_range<WPARAM>(
-      [](auto& fn) noexcept {
-        return kbdhookstate<decltype(fn)>{fn};
+      [&](auto& fn) noexcept {
+        return kbdhookstate<decltype(fn), decltype(stopSource.get_token())>{
+            fn, stopSource.get_token()};
       },
-      [](auto& r) noexcept { });
+      [](auto& r) noexcept { r.join(); });
 
+  int remaining = 5;
   for (auto next : eventRangeFactory.start(stopSource.get_token())) {
     auto evt = unifex::sync_wait(next);
     printf(".");
     fflush(stdout);
     (void)evt;
+    if (--remaining == 0) {
+      stopSource.request_stop();
+      break;
+    }
   }
 
   printf("\nexit\n");
