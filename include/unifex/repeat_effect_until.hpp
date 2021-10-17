@@ -144,6 +144,9 @@ struct _tail_restart {
 template <typename Source, typename Predicate, typename Receiver>
 class _rcvr<Source, Predicate, Receiver>::type {
   using operation = operation_type<Source, Predicate, Receiver>;
+  using tail_done = callable_result_t<tag_t<unifex::set_done>, Receiver>;
+  template<typename Error>
+  using tail_error = callable_result_t<tag_t<unifex::set_error>, Receiver, Error>;
 public:
   explicit type(operation* op) noexcept
   : op_(op) {}
@@ -160,16 +163,18 @@ public:
     return {op_};
   }
 
-  void set_done() noexcept {
+  template(typename... Args)
+    (requires (sizeof...(Args) == 0))
+  tail_done set_done(Args...) noexcept {
     UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_done(std::move(op_->receiver_));
+    return unifex::set_done(std::move(op_->receiver_));
   }
 
   template(typename Error)
     (requires receiver<Receiver, Error>)
-  void set_error(Error&& error) noexcept {
+  tail_error<Error> set_error(Error&& error) noexcept {
     UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_error(std::move(op_->receiver_), (Error&&)error);
+    return unifex::set_error(std::move(op_->receiver_), (Error&&)error);
   }
 
 private:
@@ -202,6 +207,7 @@ private:
 
 template <typename Source, typename Predicate, typename Receiver>
 class _op<Source, Predicate, Receiver>::type {
+  static_assert(receiver<Receiver>, "must be receiver");
   using _stop_token_t = get_stop_token_result_t<Receiver>;
 
 public:
@@ -278,6 +284,7 @@ public:
   template(typename Sender, typename Receiver)
     (requires same_as<remove_cvref_t<Sender>, type> AND
         constructible_from<remove_cvref_t<Receiver>, Receiver> AND
+        receiver<Receiver> AND
         sender_to<
             Source&,
             receiver_t<Source, Predicate, remove_cvref_t<Receiver>>>)

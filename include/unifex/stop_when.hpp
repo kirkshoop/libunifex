@@ -54,9 +54,47 @@ namespace unifex
     using stop_when_source_receiver =
         typename _srcvr<Source, Trigger, Receiver>::type;
 
+
+    template <typename Source, typename Receiver>
+    struct source_types {
+      template <typename... Values>
+      using value_decayed_tuple =
+          std::tuple<tag_t<unifex::set_value>, std::decay_t<Values>...>;
+
+      template <typename... Errors>
+      using error_tuples = type_list<
+          std::tuple<tag_t<unifex::set_error>, std::decay_t<Errors>>...>;
+
+      using result_variant =
+          typename concat_type_lists_t<
+              type_list<std::tuple<>, std::tuple<tag_t<unifex::set_done>>>,
+              sender_value_types_t<remove_cvref_t<Source>, type_list, value_decayed_tuple>,
+              sender_error_types_t<remove_cvref_t<Source>, error_tuples>>::template
+                  apply<std::variant>;
+
+      template <typename... Values>
+      using value_tail =
+          callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>;
+
+      template <typename Error>
+      using error_tail =
+          type_list<callable_result_t<tag_t<unifex::set_error>, Receiver, Error>>;
+
+      using tail_variant =
+          typename concat_type_lists_unique_t<
+              type_list<null_tail_callable, callable_result_t<tag_t<unifex::set_done>, Receiver>>,
+              sender_value_types_t<remove_cvref_t<Source>, type_list, value_tail>,
+              sender_error_types_t<remove_cvref_t<Source>, error_tail>>::template
+                  apply<variant_tail_callable>;
+    };
+
     template <typename Source, typename Trigger, typename Receiver>
     class _srcvr<Source, Trigger, Receiver>::type {
       using operation_state = stop_when_operation<Source, Trigger, Receiver>;
+      using result_variant = typename source_types<Source, Receiver>::result_variant;
+      using tail_variant = typename source_types<Source, Receiver>::tail_variant;
+
+      result_variant& get_result() { return op_->result_; }
 
     public:
       explicit type(operation_state* op) noexcept : op_(op) {}
@@ -65,25 +103,25 @@ namespace unifex
         : op_(std::exchange(other.op_, nullptr)) {}
 
       template <typename... Values>
-      void set_value(Values&&... values) && {
-        op_->result_.template emplace<
+      tail_variant set_value(Values&&... values) && {
+        get_result().template emplace<
             std::tuple<tag_t<unifex::set_value>, std::decay_t<Values>...>>(
             unifex::set_value, (Values &&) values...);
-        op_->notify_source_complete();
+        return op_->notify_source_complete();
       }
 
       template <typename Error>
-      void set_error(Error&& error) && noexcept {
-        op_->result_.template emplace<
+      tail_variant set_error(Error&& error) && noexcept {
+        get_result().template emplace<
             std::tuple<tag_t<unifex::set_error>, std::decay_t<Error>>>(
             unifex::set_error, (Error &&) error);
-        op_->notify_source_complete();
+        return op_->notify_source_complete();
       }
 
-      void set_done() && noexcept {
-        op_->result_.template emplace<std::tuple<tag_t<unifex::set_done>>>(
+      tail_variant set_done() && noexcept {
+        get_result().template emplace<std::tuple<tag_t<unifex::set_done>>>(
             unifex::set_done);
-        op_->notify_source_complete();
+        return op_->notify_source_complete();
       }
 
     private:
@@ -122,6 +160,7 @@ namespace unifex
     template <typename Source, typename Trigger, typename Receiver>
     class _trcvr<Source, Trigger, Receiver>::type {
       using operation_state = stop_when_operation<Source, Trigger, Receiver>;
+      using tail_variant = typename source_types<Source, Receiver>::tail_variant;
 
     public:
       explicit type(operation_state* op) noexcept : op_(op) {}
@@ -129,14 +168,14 @@ namespace unifex
       type(type&& other) noexcept
         : op_(std::exchange(other.op_, nullptr)) {}
 
-      void set_value() && noexcept { op_->notify_trigger_complete(); }
+      tail_variant set_value() && noexcept { return op_->notify_trigger_complete(); }
 
       template <typename Error>
-      void set_error(Error&&) && noexcept {
-        op_->notify_trigger_complete();
+      tail_variant set_error(Error&&) && noexcept {
+        return op_->notify_trigger_complete();
       }
 
-      void set_done() && noexcept { op_->notify_trigger_complete(); }
+      tail_variant set_done() && noexcept { return op_->notify_trigger_complete(); }
 
     private:
       friend inplace_stop_token tag_invoke(
@@ -229,57 +268,48 @@ namespace unifex
         type* op_;
       };
 
-      void notify_source_complete() noexcept {
-        this->notify_trigger_complete();
+      using result_variant = typename source_types<Source, Receiver>::result_variant;
+
+      using tail_variant = typename source_types<Source, Receiver>::tail_variant;
+
+      tail_variant notify_source_complete() noexcept {
+        return this->notify_trigger_complete();
       }
 
-      void notify_trigger_complete() noexcept {
+      tail_variant notify_trigger_complete() noexcept {
         stopSource_.request_stop();
         if (activeOpCount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
           stopCallback_.reset();
-          deliver_result();
+          return deliver_result();
         }
+        return {null_tail_callable{}};
       }
 
-      void deliver_result() noexcept {
+      tail_variant deliver_result() noexcept {
         UNIFEX_TRY {
-          std::visit(
-              [this](auto&& tuple) {
+          return std::visit(
+              [this](auto&& tuple) -> tail_variant {
                 if constexpr (
                     std::tuple_size_v<
                         std::remove_reference_t<decltype(tuple)>> != 0) {
-                  std::apply(
-                      [&](auto set_xxx, auto&&... args) {
-                        set_xxx(
+                  return std::apply(
+                      [&](auto set_xxx, auto&&... args) -> tail_variant {
+                        return {result_or_null_tail_callable(set_xxx, 
                             std::move(receiver_),
-                            static_cast<decltype(args)>(args)...);
+                            static_cast<decltype(args)>(args)...)};
                       },
                       static_cast<decltype(tuple)>(tuple));
                 } else {
                   // Should be unreachable
                   std::terminate();
+                  return {null_tail_callable{}};
                 }
               },
               std::move(result_));
         } UNIFEX_CATCH (...) {
-          unifex::set_error(std::move(receiver_), std::current_exception());
+          return {result_or_null_tail_callable(unifex::set_error, std::move(receiver_), std::current_exception())};
         }
       }
-
-      template <typename... Values>
-      using value_decayed_tuple =
-          std::tuple<tag_t<unifex::set_value>, std::decay_t<Values>...>;
-
-      template <typename... Errors>
-      using error_tuples = type_list<
-          std::tuple<tag_t<unifex::set_error>, std::decay_t<Errors>>...>;
-
-      using result_variant =
-          typename concat_type_lists_t<
-              type_list<std::tuple<>, std::tuple<tag_t<unifex::set_done>>>,
-              sender_value_types_t<remove_cvref_t<Source>, type_list, value_decayed_tuple>,
-              sender_error_types_t<remove_cvref_t<Source>, error_tuples>>::template
-                  apply<std::variant>;
 
       UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
       std::atomic<int> activeOpCount_ = 2;

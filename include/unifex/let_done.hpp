@@ -63,10 +63,14 @@ template <typename Source, typename Done>
 using _sender = typename _sndr<Source, Done>::type;
 
 template <typename Source, typename Done, typename Receiver>
-class _rcvr<Source, Done, Receiver>::type {
+class _frcvr<Source, Done, Receiver>::type {
   using operation = operation_type<Source, Done, Receiver>;
-  using final_receiver = final_receiver_type<Source, Done, Receiver>;
-  using final_sender_t = callable_result_t<Done&>;
+  using tail_done = callable_result_t<tag_t<unifex::set_done>, Receiver>;
+
+  Receiver&& consume_receiver() {
+    UNIFEX_ASSERT(op_ != nullptr);
+    return std::move(op_->receiver_);
+  }
 
 public:
   explicit type(operation* op) noexcept
@@ -78,53 +82,26 @@ public:
  
   template(typename... Values)
     (requires receiver_of<Receiver, Values...>)
-  void set_value(Values&&... values) noexcept(
+  auto set_value(Values&&... values) noexcept(
       is_nothrow_receiver_of_v<Receiver, Values...>) {
-    UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_value(std::move(op_->receiver_), (Values&&)values...);
+    return unifex::set_value(consume_receiver(), (Values&&)values...);
   }
 
-  void set_done() noexcept {
-    UNIFEX_ASSERT(op_ != nullptr);
-    auto op = op_; // preserve pointer value.
-    if constexpr (
-      is_nothrow_callable_v<Done> &&
-      is_nothrow_connectable_v<final_sender_t, final_receiver>) {
-      op->startedOp_ = 0;
-      unifex::deactivate_union_member(op->sourceOp_);
-      unifex::activate_union_member_with(op->finalOp_, [&] {
-        return unifex::connect(std::move(op->done_)(), final_receiver{op});
-      });
-      op->startedOp_ = 0 - 1;
-      unifex::start(op->finalOp_.get());
-    } else {
-      UNIFEX_TRY {
-        op->startedOp_ = 0;
-        unifex::deactivate_union_member(op->sourceOp_);
-        unifex::activate_union_member_with(op->finalOp_, [&] {
-          return unifex::connect(std::move(op->done_)(), final_receiver{op});
-        });
-        op->startedOp_ = 0 - 1;
-        unifex::start(op->finalOp_.get());
-      } UNIFEX_CATCH (...) {
-        unifex::set_error(std::move(op->receiver_), std::current_exception());
-      }
-    }
+  tail_done set_done() noexcept {
+    return unifex::set_done(consume_receiver());
   }
 
   template(typename Error)
-      (requires receiver<Receiver, Error>)
-  void set_error(Error&& error) noexcept {
-    UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_error(std::move(op_->receiver_), (Error&&)error);
+    (requires receiver<Receiver, Error>)
+  auto set_error(Error&& error) noexcept {
+    return unifex::set_error(consume_receiver(), (Error&&)error);
   }
 
 private:
-  template(typename CPO, typename Self)
-    (requires is_receiver_query_cpo_v<CPO> AND
-        same_as<remove_cvref_t<Self>, type> AND
-        is_callable_v<CPO, const Receiver&>)
-  friend auto tag_invoke(CPO cpo, Self&& r)
+  template(typename CPO)
+      (requires is_receiver_query_cpo_v<CPO> AND
+          is_callable_v<CPO, const Receiver&>)
+  friend auto tag_invoke(CPO cpo, const type& r)
       noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
       -> callable_result_t<CPO, const Receiver&> {
     return std::move(cpo)(r.get_receiver());
@@ -149,8 +126,19 @@ private:
 };
 
 template <typename Source, typename Done, typename Receiver>
-class _frcvr<Source, Done, Receiver>::type {
+class _rcvr<Source, Done, Receiver>::type {
   using operation = operation_type<Source, Done, Receiver>;
+  using final_receiver = final_receiver_type<Source, Done, Receiver>;
+  using final_sender_t = callable_result_t<Done&>;
+  using final_op_t = connect_result_t<final_sender_t, final_receiver>;
+  using set_done_tail_t = variant_tail_callable<
+      callable_result_t<tag_t<unifex::start>, final_op_t&>,
+      callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
+
+  Receiver&& consume_receiver() {
+    UNIFEX_ASSERT(op_ != nullptr);
+    return std::move(op_->receiver_);
+  }
 
 public:
   explicit type(operation* op) noexcept
@@ -162,29 +150,27 @@ public:
  
   template(typename... Values)
     (requires receiver_of<Receiver, Values...>)
-  void set_value(Values&&... values) noexcept(
+  auto set_value(Values&&... values) noexcept(
       is_nothrow_receiver_of_v<Receiver, Values...>) {
     UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_value(std::move(op_->receiver_), (Values&&)values...);
+    return unifex::set_value(consume_receiver(), (Values&&)values...);
   }
 
-  void set_done() noexcept {
-    UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_done(std::move(op_->receiver_));
-  }
+  set_done_tail_t set_done() noexcept;
 
   template(typename Error)
-    (requires receiver<Receiver, Error>)
-  void set_error(Error&& error) noexcept {
+      (requires receiver<Receiver, Error>)
+  auto set_error(Error&& error) noexcept {
     UNIFEX_ASSERT(op_ != nullptr);
-    unifex::set_error(std::move(op_->receiver_), (Error&&)error);
+    return unifex::set_error(consume_receiver(), (Error&&)error);
   }
 
 private:
-  template(typename CPO)
-      (requires is_receiver_query_cpo_v<CPO> AND
-          is_callable_v<CPO, const Receiver&>)
-  friend auto tag_invoke(CPO cpo, const type& r)
+  template(typename CPO, typename Self)
+    (requires is_receiver_query_cpo_v<CPO> AND
+        same_as<remove_cvref_t<Self>, type> AND
+        is_callable_v<CPO, const Receiver&>)
+  friend auto tag_invoke(CPO cpo, Self&& r)
       noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
       -> callable_result_t<CPO, const Receiver&> {
     return std::move(cpo)(r.get_receiver());
@@ -260,6 +246,36 @@ private:
   };
 };
 
+template <typename Source, typename Done, typename Receiver>
+typename _rcvr<Source, Done, Receiver>::type::set_done_tail_t _rcvr<Source, Done, Receiver>::type::set_done() noexcept {
+
+  UNIFEX_ASSERT(op_ != nullptr);
+  auto op = op_; // preserve pointer value.
+  if constexpr (
+    is_nothrow_callable_v<Done> &&
+    is_nothrow_connectable_v<final_sender_t, final_receiver>) {
+    op->startedOp_ = 0;
+    unifex::deactivate_union_member(op->sourceOp_);
+    unifex::activate_union_member_with(op->finalOp_, [&] {
+      return unifex::connect(std::move(op->done_)(), final_receiver{op});
+    });
+    op->startedOp_ = 0 - 1;
+    return {result_or_null_tail_callable(unifex::start, op->finalOp_.get())};
+  } else {
+    UNIFEX_TRY {
+      op->startedOp_ = 0;
+      unifex::deactivate_union_member(op->sourceOp_);
+      unifex::activate_union_member_with(op->finalOp_, [&] {
+        return unifex::connect(std::move(op->done_)(), final_receiver{op});
+      });
+      op->startedOp_ = 0 - 1;
+      return {result_or_null_tail_callable(unifex::start, op->finalOp_.get())};
+    } UNIFEX_CATCH (...) {
+      return {result_or_null_tail_callable(unifex::set_error, consume_receiver(), std::current_exception())};
+    }
+  }
+}
+
 template <typename Source, typename Done>
 class _sndr<Source, Done>::type {
   using final_sender_t = callable_result_t<Done>;
@@ -297,6 +313,7 @@ public:
     typename SourceReceiver = receiver_type<member_t<Sender, Source>, Done, Receiver>,
     typename FinalReceiver = final_receiver_type<member_t<Sender, Source>, Done, Receiver>)
       (requires same_as<remove_cvref_t<Sender>, type> AND
+          receiver<Receiver> AND
           constructible_from<Done, member_t<Sender, Done>> AND
           constructible_from<remove_cvref_t<Receiver>, Receiver> AND
           sender_to<member_t<Sender, Source>, SourceReceiver> AND
