@@ -30,7 +30,8 @@
 #include <chrono>
 #include <optional>
 
-//using namespace unifex;
+#include <comip.h>
+
 using namespace std::literals::chrono_literals;
 
 template <
@@ -223,13 +224,13 @@ create_event_sender_range(StopToken token, RegisterFn&& registerFn, UnregisterFn
 #include <windowsx.h>
 #include <winuser.h>
 #include <mfplay.h>
+#pragma comment(lib, "mfplay.lib")
 #include <mferror.h>
 #include <shobjidl.h>   // defines IFileOpenDialog
 #include <Shlwapi.h>
+#pragma comment(lib, "shlwapi.lib")
 #include <strsafe.h>
 
-#pragma comment(lib, "mfplay.lib")
-#pragma comment(lib, "shlwapi.lib")
 
 struct Player;
 
@@ -273,98 +274,178 @@ public:
 };
 
 struct Player {
-    IMFPMediaPlayer         *pPlayer = NULL;      // The MFPlay player object.
-    MediaPlayerCallback     *pPlayerCB = NULL;    // Application callback object.
+    UINT WM_PLAYER_CLICK;
+    UINT WM_PLAYER_SHOWERROR;
+    UINT WM_PLAYER_ITEMCREATED;
+    UINT WM_PLAYER_ITEMSET;
+    std::thread comThread_;
+    Player()
+      : WM_PLAYER_CLICK(RegisterWindowMessageW(L"PlayerClick"))
+      , WM_PLAYER_SHOWERROR(RegisterWindowMessageW(L"PlayerShowError"))
+      , WM_PLAYER_ITEMCREATED(RegisterWindowMessageW(L"PlayerItemCreated"))
+      , WM_PLAYER_ITEMSET(RegisterWindowMessageW(L"PlayerItemSet"))
+      , comThread_([this] {
 
-    Player() : pPlayer(nullptr), pPlayerCB(new MediaPlayerCallback(this)) {
-        HRESULT hr = MFPCreateMediaPlayer(
+        if (FAILED(CoInitializeEx(
+                NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+          std::terminate();
+        }
+
+        HRESULT hr = S_OK; 
+        auto pPlayerCB = std::make_unique<MediaPlayerCallback>(this);  // Application callback object.
+        IMFPMediaPlayer* pPlayer = nullptr;  // The MFPlay player object.
+        unifex::scope_guard releasePlayer{[&]() noexcept {
+          if (!!pPlayer) {
+            std::exchange(pPlayer, nullptr)->Release();
+          }
+        }};
+        hr = MFPCreateMediaPlayer(
             NULL,
-            FALSE,          // Start playback automatically?
-            0,              // Flags
-            pPlayerCB,      // Callback pointer
-            NULL,           // Video window
-            &pPlayer
-            );
-        if(FAILED(hr)) {
-            std::terminate();
+            FALSE,      // Start playback automatically?
+            0,          // Flags
+            pPlayerCB.get(),  // Callback pointer
+            NULL,       // Video window
+            &pPlayer);
+        if (FAILED(hr)) {
+          std::terminate();
         }
 
         // Create a new media item for this URL.
-        hr = pPlayer->CreateMediaItemFromURL(L"https://webwit.nl/input/kbsim/mp3/1_.mp3", FALSE, 0, NULL);
-        if(FAILED(hr)) {
-            std::terminate();
+        hr = pPlayer->CreateMediaItemFromURL(
+            L"https://webwit.nl/input/kbsim/mp3/1_.mp3", FALSE, 0, NULL);
+        if (FAILED(hr)) {
+          std::terminate();
         }
+
+        MSG msg{};
+        while (GetMessageW(&msg, NULL, 0, 0)) {
+          if (msg.message == WM_PLAYER_CLICK) {
+            HRESULT hr = pPlayer->Stop();
+            if (FAILED(hr)) {
+              std::terminate();
+            }
+            hr = pPlayer->Play();
+            if (FAILED(hr)) {
+              std::terminate();
+            }
+
+            printf(".");
+            fflush(stdout);
+            continue;
+          } else if (msg.message == WM_PLAYER_SHOWERROR) {
+            HRESULT hr = S_OK;
+            WCHAR str[MAX_PATH];
+
+            hr = StringCbPrintfW(
+                str,
+                sizeof(str),
+                L"%s (hr=0x%X)",
+                (PCWSTR)msg.lParam,
+                (HRESULT)msg.wParam);
+
+            if (SUCCEEDED(hr)) {
+              MessageBoxW(NULL, str, L"Error", MB_ICONERROR);
+            }
+            continue;
+          } else if (msg.message == WM_PLAYER_ITEMCREATED) {
+            HRESULT hr = S_OK;
+            IMFPMediaItem* pMediaItem = (IMFPMediaItem*)msg.lParam;
+            unifex::scope_guard releaseItem{[&]() noexcept {
+              if (!!pMediaItem) {
+                std::exchange(pMediaItem, nullptr)->Release();
+              }
+            }};
+
+            // The media item was created successfully.
+
+            if (pPlayer) {
+              // Set the media item on the player. This method completes
+              // asynchronously.
+              hr = pPlayer->SetMediaItem(pMediaItem);
+            }
+
+            if (FAILED(hr)) {
+              ShowErrorMessage(L"Error playing this file.", hr);
+            }
+            printf("OnMediaItemCreated\n");
+            fflush(stdout);
+            continue;
+          } else if (msg.message == WM_PLAYER_ITEMSET) {
+            HRESULT hr = S_OK;
+
+            // The media item was set successfully.
+
+            hr = pPlayer->Play();
+
+            if (FAILED(hr)) {
+              ShowErrorMessage(L"IMFPMediaPlayer::Play failed.", hr);
+            }
+            printf("OnMediaItemSet\n");
+            fflush(stdout);
+            continue;
+          }
+
+          DispatchMessageW(&msg);
+        }
+
+        CoUninitialize();
+
+      }) {}
+
+    void join() {
+      if (comThread_.joinable()) {
+        PostThreadMessageW(
+            GetThreadId(comThread_.native_handle()), WM_QUIT, 0, 0L);
+        comThread_.join();
+      }
     }
 
     void Click() {
-        HRESULT hr = pPlayer->Stop(); 
-        if (FAILED(hr)) {std::terminate();}
-        hr = pPlayer->Play(); 
-        if (FAILED(hr)) {std::terminate();}
-
-        printf(".");
-        fflush(stdout);
+      PostThreadMessageW(
+          GetThreadId(comThread_.native_handle()), WM_PLAYER_CLICK, 0, 0L);
     }
 
     void ShowErrorMessage(PCWSTR format, HRESULT hrErr) {
-        HRESULT hr = S_OK;
-        WCHAR msg[MAX_PATH];
-
-        hr = StringCbPrintfW(msg, sizeof(msg), L"%s (hr=0x%X)", format, hrErr);
-
-        if (SUCCEEDED(hr))
-        {
-            MessageBoxW(NULL, msg, L"Error", MB_ICONERROR);
-        }
+      PostThreadMessageW(
+          GetThreadId(comThread_.native_handle()),
+          WM_PLAYER_SHOWERROR,
+          (WPARAM)hrErr,
+          (LPARAM)format);
     }
 
     void OnMediaItemCreated(MFP_MEDIAITEM_CREATED_EVENT *pEvent) {
-        HRESULT hr = S_OK;
-
-        // The media item was created successfully.
-
-        if (pPlayer)
-        {
-            // Set the media item on the player. This method completes asynchronously.
-            hr = pPlayer->SetMediaItem(pEvent->pMediaItem);
-        }
-
-        if (FAILED(hr))
-        {
-            ShowErrorMessage(L"Error playing this file.", hr);
-        }
+      pEvent->pMediaItem->AddRef();
+      PostThreadMessageW(
+          GetThreadId(comThread_.native_handle()),
+          WM_PLAYER_ITEMCREATED,
+          0,
+          (LPARAM)pEvent->pMediaItem);
     }
 
     void OnMediaItemSet(MFP_MEDIAITEM_SET_EVENT * /*pEvent*/) 
     {
-        HRESULT hr = S_OK;
-
-        hr = pPlayer->Play();
-
-        if (FAILED(hr))
-        {
-            ShowErrorMessage(L"IMFPMediaPlayer::Play failed.", hr);
-        }
+      PostThreadMessageW(
+          GetThreadId(comThread_.native_handle()), WM_PLAYER_ITEMSET, 0, 0L);
     }
 };
 
 void STDMETHODCALLTYPE MediaPlayerCallback::OnMediaPlayerEvent(MFP_EVENT_HEADER *pEventHeader)
 {
-    if (FAILED(pEventHeader->hrEvent)) {
+  if (FAILED(pEventHeader->hrEvent)) {
     player_->ShowErrorMessage(L"Playback error", pEventHeader->hrEvent);
     return;
-    }
+  }
 
-    switch (pEventHeader->eEventType)
-    {
+  switch (pEventHeader->eEventType) {
     case MFP_EVENT_TYPE_MEDIAITEM_CREATED:
-        player_->OnMediaItemCreated(MFP_GET_MEDIAITEM_CREATED_EVENT(pEventHeader));
-        break;
+      player_->OnMediaItemCreated(
+          MFP_GET_MEDIAITEM_CREATED_EVENT(pEventHeader));
+      break;
 
     case MFP_EVENT_TYPE_MEDIAITEM_SET:
-        player_->OnMediaItemSet(MFP_GET_MEDIAITEM_SET_EVENT(pEventHeader));
-        break;
-    }
+      player_->OnMediaItemSet(MFP_GET_MEDIAITEM_SET_EVENT(pEventHeader));
+      break;
+  }
 }
 
 template<typename Fn, typename StopToken>
@@ -467,31 +548,18 @@ int wmain() {
   unifex::timed_single_thread_context context;
   unifex::inplace_stop_source stopSource;
 
-    if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
-    {
-        return 0;
-    }
-
     Player player;
 
     for (auto next : keyboard_events(stopSource.get_token())) {
         auto evt = unifex::sync_wait(
-            unifex::stop_when(
-                unifex::with_query_value(next, unifex::get_stop_token, stopSource.get_token()),
-                unifex::repeat_effect(
-                    unifex::then(unifex::schedule(), []{
-                            MSG msg{};
-                            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)){
-                              DispatchMessageW(&msg);
-                            }
-                }))
-            ));
+                unifex::with_query_value(next, unifex::get_stop_token, stopSource.get_token()));
         if (!evt) {
             break;
         }
         player.Click();
     }
 
-    printf("\nexit\n");
+    player.join();
 
+    printf("\nexit\n");
 }
