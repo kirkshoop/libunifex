@@ -137,10 +137,12 @@ struct _snd {
           (Receiver &&) rec, ((Self &&) self).fn_, ((Self &&) self).ctx_};
     }
 
-    template <typename Fn2, typename... Context2>
+    template(typename Fn2, typename... Context2)               //
+        (requires std::is_constructible_v<Fn, Fn2>&&           //
+             std::is_constructible_v<context_t, Context2...>)  //
     explicit type(Fn2&& fn, Context2&&... ctx)
       : fn_((Fn2 &&) fn)
-      , ctx_(std::make_tuple((Context2 &&) ctx...)) {}
+      , ctx_((Context2 &&) ctx...) {}
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
   };
@@ -246,14 +248,15 @@ namespace _cpo {
 struct _fn {
   template(typename Fn, typename... Context)  //
       (requires move_constructible<Fn> AND    //
-       (move_constructible<Context>&&...))    //
+       (move_constructible<Context>&&...) AND //
+        std::is_constructible_v<_sender<Fn, Context...>, Fn, Context...>)            //
       _sender<Fn, Context...>
       operator()(Fn&& fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
                _sender<Fn, Context...>,
                Fn,
                Context...>) {
-    return _sender<Fn, Context...>{{(Fn &&) fn, (Context &&) ctx...}};
+    return _sender<Fn, Context...>{(Fn &&) fn, (Context &&) ctx...};
   }
 };
 template <typename... ValueTypes>
