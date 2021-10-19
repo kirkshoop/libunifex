@@ -18,6 +18,7 @@
 #include <unifex/scheduler_concepts.hpp>
 #include <unifex/timed_single_thread_context.hpp>
 #include <unifex/sync_wait.hpp>
+#include <unifex/create.hpp>
 #include <unifex/just.hpp>
 #include <unifex/then.hpp>
 #include <unifex/stop_when.hpp>
@@ -32,173 +33,190 @@
 //using namespace unifex;
 using namespace std::literals::chrono_literals;
 
-template<typename EventType, typename RegisterFn, typename UnregisterFn>
-struct event_sender_range_factory {
-  ~event_sender_range_factory() {}
-
+template <
+    typename EventType,
+    typename RangeStopToken,
+    typename RegisterFn,
+    typename UnregisterFn>
+struct sender_range {
   struct event_function {
-      event_sender_range_factory* factory_;
-      template<typename EventType2>
-      void operator()(EventType2&& event){
-          void* op = factory_->pendingOperation_.exchange(nullptr);
-          if (op) {
-              complete_function_t complete_with_event = nullptr;
-              while (!complete_with_event) {
-                  complete_with_event = factory_->complete_with_event_.exchange(nullptr);
-              }
-              complete_with_event(op, &event);
-          } // else discard this event
-      }
-  };
-
-  using registration_t = unifex::callable_result_t<RegisterFn, event_function&>;
-  RegisterFn registerFn_;
-  UnregisterFn unregisterFn_;
-  std::atomic_bool registered_{false};
-  union storage {
-    ~storage() {}
-    int empty_{0};
-    registration_t registration_;
-  } storage_;
-  std::atomic<void*> pendingOperation_{nullptr};
-  using complete_function_t = void(*)(void*, EventType*) noexcept;
-  std::atomic<complete_function_t> complete_with_event_{nullptr};
-  event_function event_function_{this};
-
-  void stop_pending() {
-      void* op = pendingOperation_.exchange(nullptr);
+    sender_range* scope_;
+    explicit event_function(sender_range* scope) : scope_(scope) {}
+    template <typename EventType2>
+    void operator()(EventType2&& event) {
+      void* op = scope_->pendingOperation_.exchange(nullptr);
       if (op) {
         complete_function_t complete_with_event = nullptr;
         while (!complete_with_event) {
-          complete_with_event = complete_with_event_.exchange(nullptr);
+          complete_with_event =
+              scope_->complete_with_event_.exchange(nullptr);
         }
-        complete_with_event(op, nullptr);
+        complete_with_event(op, &event);
+      }  // else discard this event
+    }
+  };
+
+  using complete_function_t = void (*)(void*, EventType*) noexcept;
+
+  template <typename State>
+  void start(State* state) noexcept {
+    if (rangeToken_.stop_requested() ||
+        state->eventStopToken_.stop_requested()) {
+      unifex::set_done(std::move(state->rec_));
+    } else {
+      void* expectedOperation = nullptr;
+      if (!pendingOperation_.compare_exchange_strong(
+              expectedOperation, static_cast<void*>(state))) {
+        std::terminate();
       }
+      complete_function_t expectedComplete = nullptr;
+      if (!complete_with_event_.compare_exchange_strong(
+              expectedComplete, state->complete_with_event())) {
+        std::terminate();
+      }
+    }
+  }
+
+  using registration_t =
+    unifex::callable_result_t<RegisterFn, event_function&>;
+
+  void stop_pending() {
+    void* op = pendingOperation_.exchange(nullptr);
+    if (op) {
+      complete_function_t complete_with_event = nullptr;
+      while (!complete_with_event) {
+        complete_with_event = complete_with_event_.exchange(nullptr);
+      }
+      complete_with_event(op, nullptr);
+    }
   }
 
   void unregister() {
     bool registered = true;
     if (registered_.compare_exchange_strong(registered, false)) {
-      unregisterFn_(storage_.registration_);
-      storage_.registration_.~registration_t();
+      unregisterFn_(registration_.get());
+      registration_.destruct();
       stop_pending();
     }
   }
 
-  template<typename StopToken, typename Receiver>
-  struct event_operation_state {
-      using receiverToken = unifex::callable_result_t<
-          unifex::tag_t<unifex::get_stop_token>,
-          const Receiver&>;
-      event_sender_range_factory* factory_;
-      StopToken stopToken_;
-      Receiver receiver_;
-      receiverToken receiverToken_;
-      struct stop_callback {
-        event_sender_range_factory* factory_;
-        void operator()() { factory_->stop_pending(); }
-      };
-      typename StopToken::template callback_type<stop_callback> callback_;
 
-      template<typename Receiver2>
-      event_operation_state(event_sender_range_factory* factory, StopToken stopToken, Receiver2&& receiver) 
-          : factory_(factory), 
-          stopToken_(stopToken), 
-          receiver_((Receiver2&&)receiver), 
-          receiverToken_(unifex::get_stop_token(receiver_)), 
-          callback_(receiverToken_, stop_callback{factory_}) {}
+  struct create_sender {
+    template<template<typename...> class Variant, template<typename...> class Tuple>
+    using value_types = Variant<Tuple<EventType>>;
 
-      static void complete_with_event(void* selfVoid, EventType* event) noexcept {
-          auto& self = *reinterpret_cast<event_operation_state*>(selfVoid);
+    template <template <typename...> class Variant>
+    using error_types = Variant<std::exception_ptr>;
+
+    static inline constexpr bool sends_done = true;
+
+    template <typename Receiver, typename EventStopToken>
+    struct state {
+      static void
+      _complete_with_event(void* selfVoid, EventType* event) noexcept {
+        auto& self = *reinterpret_cast<state*>(selfVoid);
         if (!!event) {
-          unifex::set_value(std::move(self.receiver_), std::move(*event));
+          unifex::set_value(std::move(self.rec_), std::move(*event));
         } else {
-          unifex::set_done(std::move(self.receiver_));
+          unifex::set_done(std::move(self.rec_));
         }
       }
-
-      void start() & noexcept {
-        if (stopToken_.stop_requested() || receiverToken_.stop_requested()) {
-          unifex::set_done(std::move(receiver_));
-        } else {
-          void* expectedOperation = nullptr;
-          if (!factory_->pendingOperation_.compare_exchange_strong(
-                  expectedOperation, static_cast<void*>(this))) {
-            std::terminate();
-          }
-          complete_function_t expectedComplete = nullptr;
-          if (!factory_->complete_with_event_.compare_exchange_strong(
-                  expectedComplete, &complete_with_event)) {
-            std::terminate();
-          }
-        }
+      complete_function_t complete_with_event() {
+        return &_complete_with_event;
       }
-  };
-  template<typename StopToken>
-  struct event_sender {
-      event_sender_range_factory* factory_;
-      StopToken stopToken_;
-
-      template<template<typename...> class Variant, template<typename...> class Tuple>
-      using value_types = Variant<Tuple<EventType>>;
-
-      template<template<typename...> class Variant>
-      using error_types = Variant<std::exception_ptr>;
-
-      static constexpr bool sends_done = true;
-
-      template<typename Receiver>
-      event_operation_state<StopToken, Receiver> connect(Receiver&& receiver) {
-          return {factory_, stopToken_, (Receiver&&)receiver};
+      sender_range* scope_;
+      Receiver& rec_;
+      EventStopToken eventStopToken_;
+      struct stop_callback {
+        sender_range* scope_;
+        void operator()() noexcept { scope_->stop_pending(); }
+      };
+      typename EventStopToken::template callback_type<stop_callback> callback_;
+      state(sender_range* scope, Receiver& rec, EventStopToken eventStopToken)
+        : scope_(scope)
+        , rec_(rec)
+        , eventStopToken_(eventStopToken) 
+        , callback_(eventStopToken_, stop_callback{scope_}) {
+        scope_->start(this);
       }
-  };
-
-  template<typename Range, typename StopToken>
-  struct sender_range {
-    struct stop_callback {
-      event_sender_range_factory* factory_;
-      void operator()() { factory_->unregister(); }
+      state() = delete;
+      state(const state&) = delete;
+      state(state&&) = delete;
     };
-    event_sender_range_factory* factory_;
-      Range range_;
-      typename StopToken::template callback_type<stop_callback>
-          callback_;
-      ~sender_range() noexcept { factory_->unregister(); }
-      template<typename Range2>
-      explicit sender_range(
-          event_sender_range_factory* factory, Range2&& range, StopToken token)
-        : factory_(factory)
-        , range_((Range2 &&) range)
-        , callback_(token, stop_callback{factory_}) {}
 
-      auto begin() {return range_.begin();}
-      auto end() {return range_.end();}
+    template<typename Receiver>
+    state<Receiver, unifex::remove_cvref_t<unifex::callable_result_t<unifex::tag_t<unifex::get_stop_token>, Receiver>>> 
+    operator()(Receiver& rec, sender_range* scope) noexcept {
+      auto eventStopToken = unifex::get_stop_token(rec);
+      return {scope, rec, eventStopToken};
+    }
   };
 
-  template<typename StopToken>
-  auto start(StopToken token) {
+  struct stop_callback {
+    sender_range* scope_;
+    void operator()() noexcept { scope_->unregister(); }
+  };
+
+  static auto make_range(sender_range* self) {
+    return ::ranges::views::iota(0)
+    | ::ranges::views::transform(
+        [self](int) { return unifex::create(create_sender{}, self); });
+  }
+
+  unifex::callable_result_t<decltype(&make_range), sender_range*> range_;
+  // args
+  RangeStopToken rangeToken_;
+  RegisterFn registerFn_;
+  UnregisterFn unregisterFn_;
+  // cancellation
+  typename RangeStopToken::template callback_type<stop_callback> callback_;
+  // tracking result of registerFn
+  std::atomic_bool registered_;
+  unifex::manual_lifetime<registration_t> registration_;
+  // type-erased registration of a sender waiting for an event
+  std::atomic<void*> pendingOperation_;
+  std::atomic<complete_function_t> complete_with_event_;
+  // fixed storage for the fucntion used to emit an event (allows event_function& to have the right lifetime)
+  event_function event_function_;
+
+public:
+  ~sender_range() noexcept { unregister(); }
+  explicit sender_range(RangeStopToken token, RegisterFn registerFn, UnregisterFn unregisterFn)
+    : range_(make_range(this))
+    , rangeToken_(token)
+    , registerFn_(registerFn)
+    , unregisterFn_(unregisterFn) 
+    , callback_(rangeToken_, stop_callback{this}) 
+    , registered_(false) 
+    , pendingOperation_(nullptr)
+    , complete_with_event_(nullptr)
+    , event_function_(this) {
     bool unregistered = false;
     if (!registered_.compare_exchange_strong(unregistered, true)) {
       std::terminate();
     }
-    new((void*)&storage_.registration_) registration_t(registerFn_(event_function_));
-    auto ints = ::ranges::views::iota(0);
-    auto senderFactory = ::ranges::views::transform(
-            [this, token](int ){
-                return event_sender<StopToken>{this, token};
-            });
-    using rangeOfSenders = sender_range<decltype(ints | senderFactory), StopToken>;
-    return rangeOfSenders{this, ints | senderFactory, token};
+    registration_.construct_with(
+        [this]() noexcept { return registerFn_(event_function_); });
   }
+  sender_range() = delete;
+  sender_range(const sender_range&) = delete;
+  sender_range(sender_range&&) = delete;
+
+  auto begin() noexcept { return range_.begin(); }
+  auto end() noexcept { return range_.end(); }
 };
 
-template<typename EventType, typename RegisterFn, typename UnregisterFn>
-event_sender_range_factory<EventType, RegisterFn, UnregisterFn> 
-create_event_sender_range(RegisterFn&& registerFn, UnregisterFn&& unregisterFn) {
-    using result_t = event_sender_range_factory<EventType, RegisterFn, UnregisterFn>;
+template<typename EventType, typename StopToken, typename RegisterFn, typename UnregisterFn>
+sender_range<EventType, StopToken, RegisterFn, UnregisterFn>
+create_event_sender_range(StopToken token, RegisterFn&& registerFn, UnregisterFn&& unregisterFn) {
+    using result_t = sender_range<EventType, StopToken, RegisterFn, UnregisterFn>;
+    using registration_t =
+        unifex::callable_result_t<RegisterFn, typename result_t::event_function&>;
+
     static_assert(unifex::is_nothrow_callable_v<RegisterFn, typename result_t::event_function&>, "register function must be noexcept");
-    static_assert(unifex::is_nothrow_callable_v<UnregisterFn, unifex::callable_result_t<RegisterFn, typename result_t::event_function&>&>, "unregister function must be noexcept");
-    return {(RegisterFn&&)registerFn, (UnregisterFn&&)unregisterFn, {0}};
+    static_assert(unifex::is_nothrow_callable_v<UnregisterFn, registration_t&>, "unregister function must be noexcept");
+
+    return result_t{token, (RegisterFn&&) registerFn, (UnregisterFn&&) unregisterFn};
 }
 
 #include <windows.h>
@@ -435,6 +453,16 @@ struct kbdhookstate {
   }
 };
 
+template<typename StopToken>
+auto keyboard_events(StopToken token) {
+  return create_event_sender_range<WPARAM>(
+      token,
+      [&](auto& fn) noexcept {
+        return kbdhookstate<decltype(fn), StopToken>{fn, token};
+      },
+      [](auto& r) noexcept { r.join(); });
+}
+
 int wmain() {
   unifex::timed_single_thread_context context;
   unifex::inplace_stop_source stopSource;
@@ -446,15 +474,7 @@ int wmain() {
 
     Player player;
 
-    auto eventRangeFactory = create_event_sender_range<WPARAM>(
-        [&](auto& fn) noexcept {
-        return kbdhookstate<decltype(fn), decltype(stopSource.get_token())>{
-            fn, stopSource.get_token()};
-        },
-        [](auto& r) noexcept { r.join(); });
-
-
-    for (auto next : eventRangeFactory.start(stopSource.get_token())) {
+    for (auto next : keyboard_events(stopSource.get_token())) {
         auto evt = unifex::sync_wait(
             unifex::stop_when(
                 unifex::with_query_value(next, unifex::get_stop_token, stopSource.get_token()),
