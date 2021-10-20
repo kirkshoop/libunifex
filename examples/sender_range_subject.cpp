@@ -20,7 +20,10 @@
 #include <unifex/then.hpp>
 #include <unifex/let_value.hpp>
 #include <unifex/repeat_effect_until.hpp>
-#include <unifex/range.hpp>
+//#include <unifex/range.hpp>
+#include <ranges>
+
+namespace rng = std::ranges;
 
 using namespace unifex;
 using namespace std::literals::chrono_literals;

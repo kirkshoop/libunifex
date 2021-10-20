@@ -137,12 +137,9 @@ struct _snd {
           (Receiver &&) rec, ((Self &&) self).fn_, ((Self &&) self).ctx_};
     }
 
-    template(typename Fn2, typename... Context2)               //
-        (requires std::is_constructible_v<Fn, Fn2>&&           //
-             std::is_constructible_v<context_t, Context2...>)  //
-    explicit type(Fn2&& fn, Context2&&... ctx)
-      : fn_((Fn2 &&) fn)
-      , ctx_((Context2 &&) ctx...) {}
+    explicit type(Fn fn, Context... ctx)
+      : fn_((Fn &&) fn)
+      , ctx_((Context &&) ctx...){}
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
   };
@@ -237,7 +234,7 @@ struct simple_create {
 };
 
 template <typename Fn, typename... Context>
-using _sender = typename _snd<remove_cvref_t<Fn>, remove_cvref_t<Context>...>::type;
+using _sender = typename _snd<std::decay_t<Fn>, std::decay_t<Context>...>::type;
 
 template <typename T>
 T void_cast(void* pv) noexcept {
@@ -247,11 +244,11 @@ T void_cast(void* pv) noexcept {
 namespace _cpo {
 struct _fn {
   template(typename Fn, typename... Context)  //
-      (requires move_constructible<Fn> AND    //
+      (requires move_constructible<Fn> AND                          //
        (move_constructible<Context>&&...) AND //
-        std::is_constructible_v<_sender<Fn, Context...>, Fn, Context...>)            //
+        constructible_from<_sender<Fn, Context...>, Fn, Context...>)            //
       _sender<Fn, Context...>
-      operator()(Fn&& fn, Context&&... ctx) const
+      operator()(Fn fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
                _sender<Fn, Context...>,
                Fn,
@@ -265,7 +262,7 @@ struct _fn_simple {
       (requires move_constructible<Fn> AND         //
        (move_constructible<Context>&&...))         //
       _sender<simple_create<Fn, ValueTypes...>, Context...>
-      operator()(Fn&& fn, Context&&... ctx) const
+      operator()(Fn fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
                _sender<simple_create<Fn, ValueTypes...>, Context...>,
                simple_create<Fn, ValueTypes...>,

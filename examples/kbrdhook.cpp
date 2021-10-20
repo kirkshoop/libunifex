@@ -16,21 +16,22 @@
 
 #include <unifex/detail/atomic_intrusive_queue.hpp>
 
-#include <unifex/sender_concepts.hpp>
-#include <unifex/scheduler_concepts.hpp>
-#include <unifex/timed_single_thread_context.hpp>
-#include <unifex/sync_wait.hpp>
 #include <unifex/create.hpp>
 #include <unifex/just.hpp>
-#include <unifex/then.hpp>
-#include <unifex/stop_when.hpp>
 #include <unifex/let_value.hpp>
-#include <unifex/with_query_value.hpp>
 #include <unifex/repeat_effect_until.hpp>
-#include <unifex/range.hpp>
+#include <unifex/scheduler_concepts.hpp>
+#include <unifex/sender_concepts.hpp>
+#include <unifex/stop_when.hpp>
+#include <unifex/sync_wait.hpp>
+#include <unifex/then.hpp>
+#include <unifex/timed_single_thread_context.hpp>
+#include <unifex/with_query_value.hpp>
 
+#include <cassert>
 #include <chrono>
 #include <optional>
+#include <ranges>
 
 #include <comip.h>
 
@@ -98,19 +99,22 @@ struct sender_range {
   void stop_pending() { dispatch(nullptr); }
 
   struct event_function {
-    sender_range* scope_;
-    explicit event_function(sender_range* scope) : scope_(scope) {}
+    sender_range* range_;
+
     template <typename EventType2>
     void operator()(EventType2&& event) {
-      scope_->dispatch(&event);
+      range_->dispatch(&event);
     }
   };
 
-  using registration_t =
-    unifex::callable_result_t<RegisterFn, event_function&>;
+  using registration_t = unifex::callable_result_t<RegisterFn, event_function&>;
 
   struct create_sender {
-    template<template<typename...> class Variant, template<typename...> class Tuple>
+    template <
+        template <typename...>
+        class Variant,
+        template <typename...>
+        class Tuple>
     using value_types = Variant<Tuple<EventType>>;
 
     template <template <typename...> class Variant>
@@ -131,55 +135,55 @@ struct sender_range {
       }
 
       // args
-      sender_range* scope_;
+      sender_range* range_;
       Receiver& rec_;
       EventStopToken eventStopToken_;
 
-      // this is stored in an intrusive queue so that the event_function can dequeue and dispatch the next event
+      // this is stored in an intrusive queue so that the event_function can
+      // dequeue and dispatch the next event
       pending_operation pending_;
 
       // cancellation of the pending sender
       struct stop_callback {
-        sender_range* scope_;
-        void operator()() noexcept { scope_->stop_pending(); }
+        sender_range* range_;
+        void operator()() noexcept { range_->stop_pending(); }
       };
       typename EventStopToken::template callback_type<stop_callback> callback_;
 
       state(sender_range* scope, Receiver& rec, EventStopToken eventStopToken)
-        : scope_(scope)
+        : range_(scope)
         , rec_(rec)
-        , eventStopToken_(eventStopToken) 
+        , eventStopToken_(eventStopToken)
         , pending_({this, &_complete_with_event})
-        , callback_(eventStopToken_, stop_callback{scope_}) {
-        scope_->start(this);
+        , callback_(eventStopToken_, stop_callback{range_}) {
+        range_->start(this);
       }
-      state() = delete;
-      state(const state&) = delete;
       state(state&&) = delete;
     };
 
-    template<typename Receiver>
-    state<Receiver, unifex::remove_cvref_t<unifex::callable_result_t<unifex::tag_t<unifex::get_stop_token>, Receiver>>> 
+    template <typename Receiver>
+    state<Receiver, unifex::stop_token_type_t<Receiver>>
     operator()(Receiver& rec, sender_range* scope) noexcept {
-      auto eventStopToken = unifex::get_stop_token(rec);
-      return {scope, rec, eventStopToken};
+      return {scope, rec, unifex::get_stop_token(rec)};
     }
   };
 
   struct stop_callback {
-    sender_range* scope_;
-    void operator()() noexcept { scope_->_unregister(); }
+    sender_range* range_;
+    void operator()() noexcept { range_->_unregister(); }
   };
 
-  // this function is used to provide a stable type for the expression inside (that uses a lambda)
+  // this function is used to provide a stable type for the expression inside
+  // (that uses a lambda)
   static auto make_range(sender_range* self) {
-    return ::ranges::views::iota(0)
-    | ::ranges::views::transform(
-        [self](int) { return unifex::create(create_sender{}, self); });
+    return std::views::iota(0) | std::views::transform([self](int) {
+             return unifex::create(create_sender{}, self);
+           });
   }
 
   // storage for underlying range that produces senders
-  unifex::callable_result_t<decltype(&make_range), sender_range*> range_;
+  using RangeType = decltype(make_range(nullptr));
+  RangeType range_;
   // args
   RangeStopToken rangeToken_;
   RegisterFn registerFn_;
@@ -191,7 +195,8 @@ struct sender_range {
   // type-erased registration of a sender waiting for an event
   unifex::atomic_intrusive_queue<pending_operation, &pending_operation::next_>
       pendingOperations_;
-  // fixed storage for the fucntion used to emit an event (allows event_function& to have the right lifetime)
+  // fixed storage for the fucntion used to emit an event (allows
+  // event_function& to have the right lifetime)
   event_function event_function_;
 
   auto _register() noexcept {
@@ -209,45 +214,55 @@ struct sender_range {
   }
 
 public:
-  ~sender_range() noexcept { _unregister(); }
-  explicit sender_range(RangeStopToken token, RegisterFn registerFn, UnregisterFn unregisterFn)
+  explicit sender_range(
+      RangeStopToken token, RegisterFn registerFn, UnregisterFn unregisterFn)
     : range_(make_range(this))
     , rangeToken_(token)
     , registerFn_(registerFn)
-    , unregisterFn_(unregisterFn) 
-    , callback_(rangeToken_, stop_callback{this}) 
+    , unregisterFn_(unregisterFn)
+    , callback_(rangeToken_, stop_callback{this})
     , registration_(_register())
     , pendingOperations_()
     , event_function_(this) {}
-  sender_range() = delete;
-  sender_range(const sender_range&) = delete;
   sender_range(sender_range&&) = delete;
+  ~sender_range() noexcept { _unregister(); }
 
   auto begin() noexcept { return range_.begin(); }
   auto end() noexcept { return range_.end(); }
 };
 
-template<typename EventType, typename StopToken, typename RegisterFn, typename UnregisterFn>
+template <
+    typename EventType,
+    typename StopToken,
+    typename RegisterFn,
+    typename UnregisterFn>
 sender_range<EventType, StopToken, RegisterFn, UnregisterFn>
-create_event_sender_range(StopToken token, RegisterFn&& registerFn, UnregisterFn&& unregisterFn) {
-    using result_t = sender_range<EventType, StopToken, RegisterFn, UnregisterFn>;
-    using registration_t =
-        unifex::callable_result_t<RegisterFn, typename result_t::event_function&>;
+create_event_sender_range(
+    StopToken token, RegisterFn&& registerFn, UnregisterFn&& unregisterFn) {
+  using result_t = sender_range<EventType, StopToken, RegisterFn, UnregisterFn>;
+  using registration_t =
+      unifex::callable_result_t<RegisterFn, typename result_t::event_function&>;
 
-    static_assert(unifex::is_nothrow_callable_v<RegisterFn, typename result_t::event_function&>, "register function must be noexcept");
-    static_assert(unifex::is_nothrow_callable_v<UnregisterFn, registration_t&>, "unregister function must be noexcept");
+  static_assert(
+      unifex::
+          is_nothrow_callable_v<RegisterFn, typename result_t::event_function&>,
+      "register function must be noexcept");
+  static_assert(
+      unifex::is_nothrow_callable_v<UnregisterFn, registration_t&>,
+      "unregister function must be noexcept");
 
-    return result_t{token, (RegisterFn&&) registerFn, (UnregisterFn&&) unregisterFn};
+  return result_t{
+      token, (RegisterFn &&) registerFn, (UnregisterFn &&) unregisterFn};
 }
 
+#include <mfplay.h>
 #include <windows.h>
 #include <windowsx.h>
 #include <winuser.h>
-#include <mfplay.h>
 #pragma comment(lib, "mfplay.lib")
-#include <mferror.h>
-#include <shobjidl.h>   // defines IFileOpenDialog
 #include <Shlwapi.h>
+#include <mferror.h>
+#include <shobjidl.h>  // defines IFileOpenDialog
 #pragma comment(lib, "shlwapi.lib")
 #include <strsafe.h>
 
@@ -450,27 +465,25 @@ struct Player {
     PostThreadMessageW(
         GetThreadId(comThread_.native_handle()), WM_PLAYER_ITEMSET, 0, 0L);
   }
-
 };
 
-template<typename Fn>
-struct kbdhookstate {
+template <typename Fn>
+struct keyboard_hook {
   Fn& fn_;
   unifex::inplace_stop_token token_;
   HHOOK hHook_;
   std::thread msgThread_;
 
-  static inline std::atomic<kbdhookstate<Fn>*> self_{nullptr};
+  static inline std::atomic<keyboard_hook*> self_{nullptr};
 
-  explicit kbdhookstate(Fn& fn, unifex::inplace_stop_token token)
+  explicit keyboard_hook(Fn& fn, unifex::inplace_stop_token token)
     : fn_(fn)
     , token_(token)
     , hHook_(NULL)
     , msgThread_(
-          [](kbdhookstate<Fn>* self) noexcept {
-            kbdhookstate<Fn>* empty = nullptr;
-            if (!kbdhookstate<Fn>::self_.compare_exchange_strong(
-                    empty, self)) {
+          [](keyboard_hook* self) noexcept {
+            keyboard_hook* empty = nullptr;
+            if (!self_.compare_exchange_strong(empty, self)) {
               std::terminate();
             }
 
@@ -507,16 +520,14 @@ struct kbdhookstate {
               std::terminate();
             }
 
-            kbdhookstate<Fn>* expired = self;
-            if (!kbdhookstate<Fn>::self_.compare_exchange_strong(
-                    expired, nullptr)) {
+            keyboard_hook* expired = self;
+            if (!self_.compare_exchange_strong(expired, nullptr)) {
               std::terminate();
             }
 
             printf("keyboard hook removed\n");
           },
-          this) {
-  }
+          this) {}
 
   void join() {
     if (msgThread_.joinable()) {
@@ -531,11 +542,9 @@ struct kbdhookstate {
     }
   }
 
-  static
-  LRESULT CALLBACK
+  static LRESULT CALLBACK
   KbdHookProc(_In_ int nCode, _In_ WPARAM wParam, _In_ LPARAM lParam) {
-    kbdhookstate<Fn>* self =
-        kbdhookstate<Fn>::self_.load();
+    keyboard_hook* self = self_.load();
     if (!!self && nCode >= 0 &&
         (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
       self->fn_(wParam);
@@ -549,7 +558,7 @@ auto keyboard_events(unifex::inplace_stop_token token) {
   return create_event_sender_range<WPARAM>(
       token,
       [&](auto& fn) noexcept {
-        return kbdhookstate<decltype(fn)>{fn, token};
+        return keyboard_hook{fn, token};
       },
       [](auto& r) noexcept { r.join(); });
 }
@@ -575,16 +584,15 @@ struct clean_stop {
   }
   static BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT) {
-      printf("\n"); // end the line of '.'
+      printf("\n");  // end the line of '.'
       stop_.load()->request_stop();
     }
     return TRUE;
   }
 };
 
-using next_t = decltype(*keyboard_events(std::declval<unifex::inplace_stop_token>()).begin());
-auto with_stop_token(next_t& next, unifex::inplace_stop_token token) {
-  return unifex::with_query_value(next, unifex::get_stop_token, token);
+auto with_stop_token(auto token) {
+  return unifex::with_query_value(unifex::get_stop_token, token);
 }
 
 int wmain() {
@@ -595,7 +603,8 @@ int wmain() {
   Player player;
 
   for (auto next : keyboard_events(stopSource.get_token())) {
-    auto evt = unifex::sync_wait(with_stop_token(next, stopSource.get_token()));
+    auto evt =
+        unifex::sync_wait(next | with_stop_token(stopSource.get_token()));
     if (!evt) {
       break;
     }
