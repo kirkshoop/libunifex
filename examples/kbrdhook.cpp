@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <unifex/detail/atomic_intrusive_queue.hpp>
+
 #include <unifex/sender_concepts.hpp>
 #include <unifex/scheduler_concepts.hpp>
 #include <unifex/timed_single_thread_context.hpp>
@@ -34,30 +36,36 @@
 
 using namespace std::literals::chrono_literals;
 
+namespace detail {
+// _conv needed so we can emplace construct non-movable types into
+// a std::optional.
+template <typename F>
+struct _conv {
+  F f_;
+  explicit _conv(F f) noexcept : f_((F &&) f) {}
+  operator std::invoke_result_t<F>() && { return ((F &&) f_)(); }
+};
+}  // namespace detail
+
 template <
     typename EventType,
     typename RangeStopToken,
     typename RegisterFn,
     typename UnregisterFn>
 struct sender_range {
-  struct event_function {
-    sender_range* scope_;
-    explicit event_function(sender_range* scope) : scope_(scope) {}
-    template <typename EventType2>
-    void operator()(EventType2&& event) {
-      void* op = scope_->pendingOperation_.exchange(nullptr);
-      if (op) {
-        complete_function_t complete_with_event = nullptr;
-        while (!complete_with_event) {
-          complete_with_event =
-              scope_->complete_with_event_.exchange(nullptr);
-        }
-        complete_with_event(op, &event);
-      }  // else discard this event
-    }
-  };
-
   using complete_function_t = void (*)(void*, EventType*) noexcept;
+
+  struct pending_operation {
+    void* pendingOperation_;
+    complete_function_t complete_with_event_;
+
+    void operator()(EventType* e) {
+      std::exchange(complete_with_event_, nullptr)(
+          std::exchange(pendingOperation_, nullptr), e);
+    };
+
+    pending_operation* next_{nullptr};
+  };
 
   template <typename State>
   void start(State* state) noexcept {
@@ -65,42 +73,41 @@ struct sender_range {
         state->eventStopToken_.stop_requested()) {
       unifex::set_done(std::move(state->rec_));
     } else {
-      void* expectedOperation = nullptr;
-      if (!pendingOperation_.compare_exchange_strong(
-              expectedOperation, static_cast<void*>(state))) {
-        std::terminate();
-      }
-      complete_function_t expectedComplete = nullptr;
-      if (!complete_with_event_.compare_exchange_strong(
-              expectedComplete, state->complete_with_event())) {
-        std::terminate();
-      }
+      (void)pendingOperations_.enqueue(&state->pending_);
     }
   }
+
+  void dispatch(EventType* event) {
+    auto pending = pendingOperations_.dequeue_all();
+
+    if (pending.empty()) {
+      // no pending operations to complete, discard this event
+      return;
+    }
+
+    auto& complete = *pending.pop_front();
+    if (!pending.empty()) {
+      // more than one pending operation - bug in sender_range usage (do not
+      // start a sender from the range until the previous sender has completed.)
+      std::terminate();
+    }
+
+    complete(event);
+  }
+
+  void stop_pending() { dispatch(nullptr); }
+
+  struct event_function {
+    sender_range* scope_;
+    explicit event_function(sender_range* scope) : scope_(scope) {}
+    template <typename EventType2>
+    void operator()(EventType2&& event) {
+      scope_->dispatch(&event);
+    }
+  };
 
   using registration_t =
     unifex::callable_result_t<RegisterFn, event_function&>;
-
-  void stop_pending() {
-    void* op = pendingOperation_.exchange(nullptr);
-    if (op) {
-      complete_function_t complete_with_event = nullptr;
-      while (!complete_with_event) {
-        complete_with_event = complete_with_event_.exchange(nullptr);
-      }
-      complete_with_event(op, nullptr);
-    }
-  }
-
-  void unregister() {
-    bool registered = true;
-    if (registered_.compare_exchange_strong(registered, false)) {
-      unregisterFn_(registration_.get());
-      registration_.destruct();
-      stop_pending();
-    }
-  }
-
 
   struct create_sender {
     template<template<typename...> class Variant, template<typename...> class Tuple>
@@ -122,21 +129,27 @@ struct sender_range {
           unifex::set_done(std::move(self.rec_));
         }
       }
-      complete_function_t complete_with_event() {
-        return &_complete_with_event;
-      }
+
+      // args
       sender_range* scope_;
       Receiver& rec_;
       EventStopToken eventStopToken_;
+
+      // this is stored in an intrusive queue so that the event_function can dequeue and dispatch the next event
+      pending_operation pending_;
+
+      // cancellation of the pending sender
       struct stop_callback {
         sender_range* scope_;
         void operator()() noexcept { scope_->stop_pending(); }
       };
       typename EventStopToken::template callback_type<stop_callback> callback_;
+
       state(sender_range* scope, Receiver& rec, EventStopToken eventStopToken)
         : scope_(scope)
         , rec_(rec)
         , eventStopToken_(eventStopToken) 
+        , pending_({this, &_complete_with_event})
         , callback_(eventStopToken_, stop_callback{scope_}) {
         scope_->start(this);
       }
@@ -155,15 +168,17 @@ struct sender_range {
 
   struct stop_callback {
     sender_range* scope_;
-    void operator()() noexcept { scope_->unregister(); }
+    void operator()() noexcept { scope_->_unregister(); }
   };
 
+  // this function is used to provide a stable type for the expression inside (that uses a lambda)
   static auto make_range(sender_range* self) {
     return ::ranges::views::iota(0)
     | ::ranges::views::transform(
         [self](int) { return unifex::create(create_sender{}, self); });
   }
 
+  // storage for underlying range that produces senders
   unifex::callable_result_t<decltype(&make_range), sender_range*> range_;
   // args
   RangeStopToken rangeToken_;
@@ -172,33 +187,38 @@ struct sender_range {
   // cancellation
   typename RangeStopToken::template callback_type<stop_callback> callback_;
   // tracking result of registerFn
-  std::atomic_bool registered_;
-  unifex::manual_lifetime<registration_t> registration_;
+  std::optional<registration_t> registration_;
   // type-erased registration of a sender waiting for an event
-  std::atomic<void*> pendingOperation_;
-  std::atomic<complete_function_t> complete_with_event_;
+  unifex::atomic_intrusive_queue<pending_operation, &pending_operation::next_>
+      pendingOperations_;
   // fixed storage for the fucntion used to emit an event (allows event_function& to have the right lifetime)
   event_function event_function_;
 
+  auto _register() noexcept {
+    return detail::_conv{[this]() noexcept {
+      return registerFn_(event_function_);
+    }};
+  }
+
+  void _unregister() {
+    if (!!registration_) {
+      unregisterFn_(registration_.value());
+      registration_.reset();
+      stop_pending();
+    }
+  }
+
 public:
-  ~sender_range() noexcept { unregister(); }
+  ~sender_range() noexcept { _unregister(); }
   explicit sender_range(RangeStopToken token, RegisterFn registerFn, UnregisterFn unregisterFn)
     : range_(make_range(this))
     , rangeToken_(token)
     , registerFn_(registerFn)
     , unregisterFn_(unregisterFn) 
     , callback_(rangeToken_, stop_callback{this}) 
-    , registered_(false) 
-    , pendingOperation_(nullptr)
-    , complete_with_event_(nullptr)
-    , event_function_(this) {
-    bool unregistered = false;
-    if (!registered_.compare_exchange_strong(unregistered, true)) {
-      std::terminate();
-    }
-    registration_.construct_with(
-        [this]() noexcept { return registerFn_(event_function_); });
-  }
+    , registration_(_register())
+    , pendingOperations_()
+    , event_function_(this) {}
   sender_range() = delete;
   sender_range(const sender_range&) = delete;
   sender_range(sender_range&&) = delete;
