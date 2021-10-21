@@ -31,11 +31,15 @@
 
 struct Player {
   class MediaPlayerCallback : public IMFPMediaPlayerCallback {
+    size_t id_;
     Player* player_;
     long m_cRef;  // Reference count
 
   public:
-    explicit MediaPlayerCallback(Player* player) : player_(player), m_cRef(1) {}
+    explicit MediaPlayerCallback(Player* player, size_t id)
+      : id_(id)
+      , player_(player)
+      , m_cRef(1) {}
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
       static const QITAB qit[] = {
@@ -64,7 +68,7 @@ struct Player {
       switch (pEventHeader->eEventType) {
         case MFP_EVENT_TYPE_MEDIAITEM_CREATED:
           player_->OnMediaItemCreated(
-              MFP_GET_MEDIAITEM_CREATED_EVENT(pEventHeader));
+              MFP_GET_MEDIAITEM_CREATED_EVENT(pEventHeader), id_);
           break;
 
         case MFP_EVENT_TYPE_MEDIAITEM_SET:
@@ -91,47 +95,90 @@ struct Player {
         std::terminate();
       }
 
-      HRESULT hr = S_OK;
-      auto pPlayerCB = std::make_unique<MediaPlayerCallback>(
-          this);                           // Application callback object.
-      IMFPMediaPlayer* pPlayer = nullptr;  // The MFPlay player object.
-      unifex::scope_guard releasePlayer{[&]() noexcept {
-        if (!!pPlayer) {
-          std::exchange(pPlayer, nullptr)->Release();
+      struct player {
+        ~player() {
+          if (!!pPlayer_) {
+            std::exchange(pPlayer_, nullptr)->Release();
+          }
+          if (!!pCallback_) {
+            std::exchange(pCallback_, nullptr)->Release();
+          }
         }
-      }};
-      hr = MFPCreateMediaPlayer(
-          NULL,
-          FALSE,            // Start playback automatically?
-          0,                // Flags
-          pPlayerCB.get(),  // Callback pointer
-          NULL,             // Video window
-          &pPlayer);
-      if (FAILED(hr)) {
-        std::terminate();
-      }
+        player() : id_(-1), pCallback_(nullptr), pPlayer_(nullptr) {}
+        void start(Player* player, size_t id) {
+          HRESULT hr = S_OK;
 
-      // Create a new media item for this URL.
-      hr = pPlayer->CreateMediaItemFromURL(
-          L"https://webwit.nl/input/kbsim/mp3/1_.mp3", FALSE, 0, NULL);
-      if (FAILED(hr)) {
-        std::terminate();
-      }
+          id_ = id;
+          pCallback_ = new (std::nothrow) MediaPlayerCallback{player, id_};
 
-      MSG msg{};
-      while (GetMessageW(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_PLAYER_CLICK) {
-          HRESULT hr = pPlayer->Stop();
+          hr = MFPCreateMediaPlayer(
+              NULL,
+              FALSE,       // Start playback automatically?
+              0,           // Flags
+              pCallback_,  // Callback pointer
+              NULL,        // Video window
+              &pPlayer_);
           if (FAILED(hr)) {
             std::terminate();
           }
-          hr = pPlayer->Play();
+
+          // Create a new media item for this URL.
+          hr = pPlayer_->CreateMediaItemFromURL(
+              L"https://webwit.nl/input/kbsim/mp3/1_.mp3", FALSE, 0, NULL);
+          if (FAILED(hr)) {
+            std::terminate();
+          }
+        }
+
+        void Click() {
+          HRESULT hr = pPlayer_->Stop();
+          if (FAILED(hr)) {
+            std::terminate();
+          }
+          hr = pPlayer_->Play();
           if (FAILED(hr)) {
             std::terminate();
           }
 
           printf(".");
           fflush(stdout);
+        }
+
+        void ItemCreated(Player* player, IMFPMediaItem* pMediaItem) {
+          HRESULT hr = S_OK;
+
+          // The media item was created successfully.
+
+          if (pPlayer_) {
+            // Set the media item on the player. This method completes
+            // asynchronously.
+            hr = pPlayer_->SetMediaItem(pMediaItem);
+          }
+
+          if (FAILED(hr)) {
+            player->ShowErrorMessage(L"Error playing this file.", hr);
+          }
+          printf("OnMediaItemCreated\n");
+          fflush(stdout);
+        }
+
+        size_t id_;
+        IMFPMediaPlayerCallback* pCallback_;  // Application callback object.
+        IMFPMediaPlayer* pPlayer_;            // The MFPlay player object.
+      };
+
+      std::array<player, 16> players;
+
+      size_t current = 0;
+
+      for (auto& p : players) {
+        p.start(this, current++ % players.size());
+      }
+ 
+      MSG msg{};
+      while (GetMessageW(&msg, NULL, 0, 0)) {
+        if (msg.message == WM_PLAYER_CLICK) {
+          players[++current % players.size()].Click();
           continue;
         } else if (msg.message == WM_PLAYER_SHOWERROR) {
           HRESULT hr = S_OK;
@@ -149,7 +196,7 @@ struct Player {
           }
           continue;
         } else if (msg.message == WM_PLAYER_ITEMCREATED) {
-          HRESULT hr = S_OK;
+          
           IMFPMediaItem* pMediaItem = (IMFPMediaItem*)msg.lParam;
           unifex::scope_guard releaseItem{[&]() noexcept {
             if (!!pMediaItem) {
@@ -157,30 +204,11 @@ struct Player {
             }
           }};
 
-          // The media item was created successfully.
+          players[msg.wParam].ItemCreated(this, pMediaItem);
 
-          if (pPlayer) {
-            // Set the media item on the player. This method completes
-            // asynchronously.
-            hr = pPlayer->SetMediaItem(pMediaItem);
-          }
-
-          if (FAILED(hr)) {
-            ShowErrorMessage(L"Error playing this file.", hr);
-          }
-          printf("OnMediaItemCreated\n");
-          fflush(stdout);
           continue;
         } else if (msg.message == WM_PLAYER_ITEMSET) {
-          HRESULT hr = S_OK;
-
           // The media item was set successfully.
-
-          hr = pPlayer->Play();
-
-          if (FAILED(hr)) {
-            ShowErrorMessage(L"IMFPMediaPlayer::Play failed.", hr);
-          }
           printf("OnMediaItemSet\n");
           fflush(stdout);
           continue;
@@ -222,12 +250,12 @@ struct Player {
         (LPARAM)format);
   }
 
-  void OnMediaItemCreated(MFP_MEDIAITEM_CREATED_EVENT* pEvent) {
+  void OnMediaItemCreated(MFP_MEDIAITEM_CREATED_EVENT* pEvent, size_t id) {
     pEvent->pMediaItem->AddRef();
     PostThreadMessageW(
         GetThreadId(comThread_.native_handle()),
         WM_PLAYER_ITEMCREATED,
-        0,
+        id,
         (LPARAM)pEvent->pMediaItem);
   }
 

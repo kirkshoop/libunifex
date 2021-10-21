@@ -19,7 +19,6 @@
 #include <unifex/sender_concepts.hpp>
 #include <unifex/sync_wait.hpp>
 #include <unifex/task.hpp>
-#include <unifex/with_query_value.hpp>
 
 #include <cassert>
 
