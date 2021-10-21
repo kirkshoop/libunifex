@@ -14,41 +14,28 @@
  * limitations under the License.
  */
 
+#include <unifex/coroutine.hpp>
+#include <unifex/inplace_stop_token.hpp>
 #include <unifex/sender_concepts.hpp>
 #include <unifex/sync_wait.hpp>
-#include <unifex/with_query_value.hpp>
-#include <unifex/inplace_stop_token.hpp>
-#include <unifex/coroutine.hpp>
 #include <unifex/task.hpp>
+#include <unifex/with_query_value.hpp>
 
 #include <cassert>
 
-#include "kbdhook/sender_range.hpp"
+#include "kbdhook/clean_stop.hpp"
 #include "kbdhook/keyboard_hook.hpp"
 #include "kbdhook/player.hpp"
-#include "kbdhook/clean_stop.hpp"
-
-// create a range of senders where each sender completes on the next 
-// keyboard press
-auto keyboard_events(unifex::inplace_stop_token token) {
-  return create_event_sender_range<WPARAM>(
-      token,
-      [&](auto& fn) noexcept {
-        return keyboard_hook{fn, token};
-      },
-      [](auto& r) noexcept { r.join(); });
-}
 
 auto with_stop_token(unifex::inplace_stop_token token) {
   return unifex::with_query_value(unifex::get_stop_token, token);
 }
 
-//#pragma optimize("", off )
 unifex::task<void> clickety(Player& player, unifex::inplace_stop_token token) {
+  keyboard_hook keyboard{token};
 
-  for (auto next : keyboard_events(token)) {
-    auto evt =
-        co_await (next | with_stop_token(token));
+  for (auto next : keyboard.events()) {
+    auto evt = co_await(next | with_stop_token(token));
     if (!evt) {
       break;
     }

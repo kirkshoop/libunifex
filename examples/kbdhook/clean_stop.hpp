@@ -25,29 +25,29 @@
 #include <atomic>
 
 struct clean_stop {
-    static inline std::atomic<unifex::inplace_stop_source*> stop_{ nullptr };
+  static inline std::atomic<unifex::inplace_stop_source*> stop_{nullptr};
 
-    ~clean_stop() {
-        if (!SetConsoleCtrlHandler(&consoleHandler, FALSE)) {
-            std::terminate();
-        }
-        if (stop_.exchange(nullptr) == nullptr) {
-            std::terminate();
-        }
+  ~clean_stop() {
+    if (!SetConsoleCtrlHandler(&consoleHandler, FALSE)) {
+      std::terminate();
     }
-    explicit clean_stop(unifex::inplace_stop_source& stop) {
-        if (stop_.exchange(&stop) != nullptr) {
-            std::terminate();
-        }
-        if (!SetConsoleCtrlHandler(&consoleHandler, TRUE)) {
-            std::terminate();
-        }
+    if (stop_.exchange(nullptr) == nullptr) {
+      std::terminate();
     }
-    static BOOL WINAPI consoleHandler(DWORD signal) {
-        if (signal == CTRL_C_EVENT) {
-            printf("\n");  // end the line of '.'
-            stop_.load()->request_stop();
-        }
-        return TRUE;
+  }
+  explicit clean_stop(unifex::inplace_stop_source& stop) {
+    if (stop_.exchange(&stop) != nullptr) {
+      std::terminate();
     }
+    if (!SetConsoleCtrlHandler(&consoleHandler, TRUE)) {
+      std::terminate();
+    }
+  }
+  static BOOL WINAPI consoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT) {
+      printf("\n");  // end the line of '.'
+      stop_.load()->request_stop();
+    }
+    return TRUE;
+  }
 };
