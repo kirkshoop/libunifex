@@ -19,6 +19,9 @@
 #include <unifex/get_stop_token.hpp>
 #include <unifex/receiver_concepts.hpp>
 #include <unifex/stop_token_concepts.hpp>
+#include <unifex/inplace_stop_token.hpp>
+#include <unifex/unstoppable_token.hpp>
+#include <unifex/create.hpp>
 
 #include <condition_variable>
 #include <mutex>
@@ -145,12 +148,61 @@ class context {
     return scheduler{this};
   }
 
-  void run();
+  inline void run() { run(unifex::unstoppable_token{}); }
+
+  inline auto run_as_sender() { return unifex::create(make_run_sender{this}); }
 
   void stop();
 
  private:
   void enqueue(task_base* task);
+
+  struct make_run_sender {
+    template <
+        template <typename...>
+        class Variant,
+        template <typename...>
+        class Tuple>
+    using value_types = Variant<Tuple<>>;
+
+    template <template <typename...> class Variant>
+    using error_types = Variant<std::exception_ptr>;
+
+    static inline constexpr bool sends_done = false;
+
+    struct unused {};
+
+    context* self;
+    template<typename Receiver>
+    auto operator()(Receiver rec) {
+      try {
+        if constexpr (callable<unifex::tag_t<unifex::get_stop_token>, decltype(rec)>) {
+          if (self->run(unifex::get_stop_token(rec))) {
+            unifex::set_done(std::move(rec));
+            return unused{};
+          }
+        } else {
+          self->run();
+        }
+        unifex::set_value(std::move(rec));
+      } catch (...) {
+        unifex::set_error(std::move(rec), std::current_exception());
+      }
+      return unused{};
+    }
+  };
+
+  bool run(unifex::inplace_stop_token token);
+  bool run(unifex::unstoppable_token token);
+
+  template <typename StopToken>
+  bool run(StopToken token) {
+    unifex::inplace_stop_source stopSource;
+    unifex::inplace_stop_callback forwardrequest{token, [&]() noexcept {
+                                                   stopSource.request_stop();
+                                                 }};
+    return run(stopSource.get_token());
+  }
 
   std::mutex mutex_;
   std::condition_variable cv_;
