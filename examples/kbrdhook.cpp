@@ -27,15 +27,11 @@
 #include "kbdhook/keyboard_hook.hpp"
 #include "kbdhook/player.hpp"
 
-auto with_stop_token(unifex::inplace_stop_token token) {
-  return unifex::with_query_value(unifex::get_stop_token, token);
-}
-
 unifex::task<void> clickety(Player& player, unifex::inplace_stop_token token) {
   keyboard_hook keyboard{token};
 
   for (auto next : keyboard.events()) {
-    auto evt = co_await(next | with_stop_token(token));
+    auto evt = co_await next;
     if (!evt) {
       break;
     }

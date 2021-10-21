@@ -21,6 +21,8 @@
 #include <unifex/create.hpp>
 #include <unifex/scheduler_concepts.hpp>
 #include <unifex/sender_concepts.hpp>
+#include <unifex/sender_concepts.hpp>
+#include <unifex/unstoppable_token.hpp>
 
 #include <optional>
 #include <ranges>
@@ -150,9 +152,18 @@ struct sender_range {
     };
 
     template <typename Receiver>
+    requires unifex::
+        is_callable_v<unifex::tag_t<unifex::get_stop_token>, Receiver>
     state<Receiver, unifex::stop_token_type_t<Receiver>>
     operator()(Receiver& rec, sender_range* scope) noexcept {
       return {scope, rec, unifex::get_stop_token(rec)};
+    }
+
+    template <typename Receiver>
+    requires (!unifex::is_callable_v<unifex::tag_t<unifex::get_stop_token>, Receiver>)
+    state<Receiver, unifex::unstoppable_token>
+    operator()(Receiver& rec, sender_range* scope) noexcept {
+      return {scope, rec, unifex::unstoppable_token{}};
     }
   };
 
