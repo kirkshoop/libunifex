@@ -27,27 +27,31 @@ namespace _create {
 
 template <typename Receiver, typename Fn, typename... Context>
 struct _op {
+  struct type;
   struct _receiver {
-    explicit _receiver(Receiver rec) noexcept(
+    explicit _receiver(type* op) noexcept(
         std::is_nothrow_move_constructible_v<Receiver>)
-      : rec_(std::move(rec)) {}
+      : op_(op) {}
 
     template(typename... Ts)                     //
         (requires receiver_of<Receiver, Ts...>)  //
         void set_value(Ts&&... ts) noexcept(
             is_nothrow_receiver_of_v<Receiver, Ts...>) {
-      unifex::set_value((Receiver &&) rec_, (Ts &&) ts...);
+      unifex::set_value(std::move(get_receiver()), (Ts &&) ts...);
     }
 
     template(typename Error)                  //
         (requires receiver<Receiver, Error>)  //
         void set_error(Error&& error) noexcept {
-      unifex::set_error((Receiver &&) rec_, (Error &&) error);
+      unifex::set_error(std::move(get_receiver()), (Error &&) error);
     }
 
-    void set_done() noexcept { unifex::set_done((Receiver &&) rec_); }
+    void set_done() noexcept {
+      unifex::set_done(std::move(get_receiver()));
+    }
 
   private:
+    Receiver& get_receiver() const { return op_->get_receiver(); }
     // Forward other receiver queries
     template(typename CPO)                          //
         (requires is_receiver_query_cpo_v<CPO> AND  //
@@ -55,10 +59,9 @@ struct _op {
         friend auto tag_invoke(CPO cpo, const _receiver& self) noexcept(
             is_nothrow_callable_v<CPO, const Receiver&>)
             -> callable_result_t<CPO, const Receiver&> {
-      return std::move(cpo)(self.rec_);
+      return std::move(cpo)(self.get_receiver());
     }
-
-    UNIFEX_NO_UNIQUE_ADDRESS Receiver rec_;
+    type* op_;
   };
   struct type {
     using context_t = std::tuple<Context...>;
@@ -71,19 +74,22 @@ struct _op {
     }
     explicit type(Receiver rec, Fn fn, context_t ctx) noexcept(
         std::is_nothrow_move_constructible_v<Fn>&&
-        std::is_nothrow_move_constructible_v<context_t>)
-      : rec_(std::move(rec))
+            std::is_nothrow_move_constructible_v<context_t>)
+      : receiver_(std::move(rec))
       , fn_(std::move(fn))
       , ctx_(std::move(ctx))
       , state_()
+      , rec_(this)
       , started_(false) {}
 
   private:
-    Receiver& get_receiver() {return rec_.rec_;}
+    friend struct _receiver;
+    Receiver& get_receiver() { return receiver_; }
     friend void tag_invoke(tag_t<start>, type& self) noexcept try {
       std::apply(
           [&](auto&... ctx) {
-            self.state_.construct_with([&]() noexcept {return self.fn_(self.rec_, ctx...);});
+            self.state_.construct_with(
+                [&]() noexcept { return self.fn_(self.rec_, ctx...); });
           },
           self.ctx_);
       self.started_ = true;
@@ -91,10 +97,11 @@ struct _op {
       unifex::set_error(std::move(self.rec_), std::current_exception());
     }
 
-    UNIFEX_NO_UNIQUE_ADDRESS _receiver rec_;
+    UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
     UNIFEX_NO_UNIQUE_ADDRESS manual_lifetime<state_t> state_;
+    _receiver rec_;
     bool started_;
   };
 };
@@ -121,7 +128,8 @@ struct _snd {
 
     template(typename Self, typename Receiver)                         //
         (requires derived_from<remove_cvref_t<Self>, type> AND         //
-             constructible_from<Fn, member_t<Self, Fn>> AND            //
+             receiver<Receiver> AND                                    //
+                 constructible_from<Fn, member_t<Self, Fn>> AND        //
          (constructible_from<Context, member_t<Self, Context>>&&...))  //
         friend _operation<
             remove_cvref_t<Receiver>,
@@ -139,7 +147,7 @@ struct _snd {
 
     explicit type(Fn fn, Context... ctx)
       : fn_((Fn &&) fn)
-      , ctx_((Context &&) ctx...){}
+      , ctx_((Context &&) ctx...) {}
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
   };
@@ -161,13 +169,15 @@ struct simple_create {
 
   static inline constexpr bool sends_done = true;
 
-  template<typename Receiver, typename... Context>
+  template <typename Receiver, typename... Context>
   struct state {
     using context_t = std::tuple<Context...>;
     using ref_context = std::tuple<Context&...>;
     using cref_context = std::tuple<const Context&...>;
     ~state() {}
-    explicit state(Fn fn, Receiver& rec, Context&... ctx) noexcept : rec_(rec, ctx...), fn_(std::move(fn)) {
+    explicit state(Fn fn, Receiver& rec, Context&... ctx) noexcept
+      : rec_(rec, ctx...)
+      , fn_(std::move(fn)) {
       fn_(rec_);
     }
     state() = delete;
@@ -175,43 +185,49 @@ struct simple_create {
     state(state&&) = delete;
 
     struct _receiver {
+      ~_receiver() { std::exchange(rec_, nullptr); }
 
-      ~_receiver() {std::exchange(rec_, nullptr);}
-
-      explicit _receiver(Receiver& rec, Context&... ctx) : rec_(&rec), ctx_(ctx...), cctx_(ctx...) {}
+      explicit _receiver(Receiver& rec, Context&... ctx)
+        : rec_(&rec)
+        , ctx_(ctx...)
+        , cctx_(ctx...) {}
 
       template(typename... Ts)                     //
           (requires receiver_of<Receiver, Ts...>)  //
           void set_value(Ts&&... ts) noexcept(
               is_nothrow_receiver_of_v<Receiver, Ts...>) {
-        unifex::set_value((Receiver &&) *rec_, (Ts &&) ts...);
+        unifex::set_value((Receiver &&) * rec_, (Ts &&) ts...);
       }
 
       template(typename Error)                  //
           (requires receiver<Receiver, Error>)  //
           void set_error(Error&& error) noexcept {
-        unifex::set_error((Receiver &&) *rec_, (Error &&) error);
+        unifex::set_error((Receiver &&) * rec_, (Error &&) error);
       }
 
-      void set_done() noexcept { unifex::set_done((Receiver &&) *rec_); }
+      void set_done() noexcept { unifex::set_done((Receiver &&) * rec_); }
 
-      template (class Ctx = ref_context)
-        (requires (sizeof...(Context) > 0))
-      ref_context const & context() & noexcept { return ctx_; }
+      template(class Ctx = ref_context)(requires(sizeof...(Context) > 0))
+          ref_context const& context() & noexcept {
+        return ctx_;
+      }
 
-      template (class Ctx = ref_context)
-        (requires (sizeof...(Context) > 0))
-      cref_context const& context() const & noexcept { return cctx_; }
+      template(class Ctx = ref_context)(requires(sizeof...(Context) > 0))
+          cref_context const& context() const& noexcept {
+        return cctx_;
+      }
 
-      template (class Ctx = ref_context)
-        (requires (sizeof...(Context) > 0))
-      context_t context() && noexcept { return std::move(ctx_); }
+      template(class Ctx = ref_context)(
+          requires(sizeof...(Context) > 0)) context_t context() && noexcept {
+        return std::move(ctx_);
+      }
+
     private:
       // Forward other receiver queries
       template(typename CPO)                          //
           (requires is_receiver_query_cpo_v<CPO> AND  //
-              is_callable_v<CPO, const Receiver&>)   //
-          friend auto tag_invoke(CPO cpo, const state& self) noexcept(
+               is_callable_v<CPO, const Receiver&>)   //
+          friend auto tag_invoke(CPO cpo, const _receiver& self) noexcept(
               is_nothrow_callable_v<CPO, const Receiver&>)
               -> callable_result_t<CPO, const Receiver&> {
         return std::move(cpo)(*self.rec_);
@@ -243,10 +259,10 @@ T void_cast(void* pv) noexcept {
 
 namespace _cpo {
 struct _fn {
-  template(typename Fn, typename... Context)  //
-      (requires move_constructible<Fn> AND                          //
-       (move_constructible<Context>&&...) AND //
-        constructible_from<_sender<Fn, Context...>, Fn, Context...>)            //
+  template(typename Fn, typename... Context)                             //
+      (requires move_constructible<Fn> AND                               //
+       (move_constructible<Context>&&...) AND                            //
+           constructible_from<_sender<Fn, Context...>, Fn, Context...>)  //
       _sender<Fn, Context...>
       operator()(Fn fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
@@ -258,9 +274,9 @@ struct _fn {
 };
 template <typename... ValueTypes>
 struct _fn_simple {
-  template(typename Fn, typename... Context)       //
-      (requires move_constructible<Fn> AND         //
-       (move_constructible<Context>&&...))         //
+  template(typename Fn, typename... Context)  //
+      (requires move_constructible<Fn> AND    //
+       (move_constructible<Context>&&...))    //
       _sender<simple_create<Fn, ValueTypes...>, Context...>
       operator()(Fn fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
@@ -285,12 +301,13 @@ struct _fn_simple {
  * old_c_style_api(int a, int b, void* context, callback_t* callback_fn);
  *
  *  // A sender-based async API implemented in terms of the C-style API (using
- * C++20): 
- *   unifex::typed_sender auto new_sender_api(int a, int b) { 
+ * C++20):
+ *   unifex::typed_sender auto new_sender_api(int a, int b) {
  *     return unifex::create(unifex::simple_create<int>{
  *       [](auto& rec, int& a, int& b) noexcept {
  *         old_c_style_api(a, b, &rec, +[](void* context, int result) {
- *           unifex::set_value(unifex::void_cast<decltype(rec)>(context), result);
+ *           unifex::set_value(unifex::void_cast<decltype(rec)>(context),
+ * result);
  *         });
  *       }}, a, b);
  *   }
@@ -303,13 +320,13 @@ struct _fn_simple {
  * be stored in a stable location and is allowed to be no-move no-copy. This
  * function object or the constructor of the returned state object, could
  * dispatch to a C-style callback (see example).
- * \param[in] ctx... optional 
+ * \param[in] ctx... optional
  * extra data to be bundled with the receiver passed to \c fn. E.g., \c fn is a
  * lambda that accepts <tt>(auto& rec, decltype(ctx)&...)</tt>.
- * \return A sender that, when connected and started, dispatches to the wrapped 
- * C-style API with the callback of your choosing. The receiver passed to \c fn 
- * wraps the receiver passed to \c connect . Your callback must "complete" the 
- * receiver passed to \c fn , which will complete the receiver passed to 
+ * \return A sender that, when connected and started, dispatches to the wrapped
+ * C-style API with the callback of your choosing. The receiver passed to \c fn
+ * wraps the receiver passed to \c connect . Your callback must "complete" the
+ * receiver passed to \c fn , which will complete the receiver passed to
  * \c connect in turn.
  */
 inline constexpr _create::_cpo::_fn create{};
@@ -325,24 +342,24 @@ inline constexpr _create::_cpo::_fn create{};
  * old_c_style_api(int a, int b, void* context, callback_t* callback_fn);
  *
  *  // A sender-based async API implemented in terms of the C-style API (using
- * C++20): 
- *   unifex::typed_sender auto new_sender_api(int a, int b) { 
+ * C++20):
+ *   unifex::typed_sender auto new_sender_api(int a, int b) {
  *     return unifex::create_simple<int>([a, b](auto& rec) noexcept {
  *       old_c_style_api(a, b, &rec, +[](void* context, int result) {
  *         unifex::set_value(unifex::void_cast<decltype(rec)>(context), result);
  *       });
  *     });
  *   }
- * \endcode 
+ * \endcode
  * \param[in] fn A void-returning callable that accepts an lvalue reference to
  * an object that satisfies the \c unifex::receiver<> concept and lvalue
  * references to each context parameter provided to \c create_simple(). This
- * function should dispatch to a C-style callback (see example). The receiver 
- * object also has a method <tt>std::tuple<ctx...> context()</tt> that provides 
+ * function should dispatch to a C-style callback (see example). The receiver
+ * object also has a method <tt>std::tuple<ctx...> context()</tt> that provides
  * access to the arguments, after the lambda, passed to \c create_simple()
  * \param[in] ctx... optional extra data to be bundled with the receiver passed
  * to \c fn. E.g., \c fn is a lambda that accepts <tt>(auto& rec,
- * decltype(ctx)&...)</tt>. 
+ * decltype(ctx)&...)</tt>.
  * \return A sender that, when connected and
  * started, dispatches to the wrapped C-style API with the callback of your
  * choosing. The receiver passed to \c fn wraps the receiver passed to \c
