@@ -63,17 +63,14 @@ int wmain() {
   Player player{com.get_scheduler()};
   keyboard_hook keyboard{com.get_scheduler()};
 
-  // start
-  unifex::sync_wait(unifex::when_all(
-      unifex::sequence(exit.start(), player.start(), keyboard.start())));
-
-  unifex::sync_wait(
+  unifex::sync_wait(unifex::sequence(
+      // start
+      unifex::sequence(exit.start(), player.start(), keyboard.start()),
+      // click
       clickety(player, keyboard) |
-      unifex::stop_when(unifex::sequence(
-          unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
-          exit.event())));
-
-  // stop
-  unifex::sync_wait(unifex::when_all(
+          unifex::stop_when(unifex::sequence(
+              unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
+              exit.event())),
+      // stop
       unifex::sequence(keyboard.destroy(), player.destroy(), exit.destroy())));
 }
