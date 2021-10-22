@@ -34,7 +34,6 @@
 #include <winuser.h>
 
 struct com_thread {
-  unifex::manual_event_loop& run_;
   using run_scheduler_t =
       decltype(std::declval<unifex::manual_event_loop&>().get_scheduler());
   using time_scheduler_t =
@@ -44,12 +43,12 @@ struct com_thread {
   using duration_t =
       typename unifex::timed_single_thread_context::clock_t::duration;
   duration_t maxTime_;
+  unifex::manual_event_loop run_;
   std::thread comThread_;
+  ~com_thread() { join(); }
   com_thread() = delete;
-  explicit com_thread(
-      unifex::manual_event_loop& run, time_scheduler_t time, duration_t maxTime)
-    : run_(run)
-    , time_(std::move(time))
+  explicit com_thread(time_scheduler_t time, duration_t maxTime)
+    : time_(std::move(time))
     , maxTime_(maxTime)
     , comThread_([this]() noexcept {
       {  // create message queue

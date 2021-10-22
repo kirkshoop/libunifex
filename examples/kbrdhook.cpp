@@ -57,8 +57,7 @@ int wmain() {
   using namespace std::literals::chrono_literals;
 
   unifex::timed_single_thread_context time;
-  unifex::manual_event_loop loop;
-  com_thread com{loop, time.get_scheduler(), 50ms};
+  com_thread com{time.get_scheduler(), 50ms};
 
   clean_stop exit{com.get_scheduler()};
   Player player{com.get_scheduler()};
@@ -77,6 +76,4 @@ int wmain() {
   // stop
   unifex::sync_wait(unifex::when_all(
       unifex::sequence(keyboard.destroy(), player.destroy(), exit.destroy())));
-
-  com.join();
 }
