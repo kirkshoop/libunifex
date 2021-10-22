@@ -236,6 +236,8 @@ public:
     return sender_view{&range_};
   }
 
+  auto& get_registration() { return registration_; }
+
   auto begin() noexcept { return range_.begin(); }
   auto end() noexcept { return range_.end(); }
 };

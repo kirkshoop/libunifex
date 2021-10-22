@@ -15,26 +15,31 @@
  */
 
 #include <unifex/coroutine.hpp>
-#include <unifex/manual_event_loop.hpp>
-#include <unifex/timed_single_thread_context.hpp>
+#include <unifex/done_as_optional.hpp>
 #include <unifex/inplace_stop_token.hpp>
+#include <unifex/let_done.hpp>
+#include <unifex/let_value.hpp>
+#include <unifex/manual_event_loop.hpp>
+#include <unifex/scope_guard.hpp>
 #include <unifex/sender_concepts.hpp>
+#include <unifex/sequence.hpp>
 #include <unifex/sync_wait.hpp>
 #include <unifex/task.hpp>
+#include <unifex/timed_single_thread_context.hpp>
+#include <unifex/when_all.hpp>
 
 #include <cassert>
 #include <chrono>
+#include <optional>
 
-#include "kbdhook/com_thread.hpp"
 #include "kbdhook/clean_stop.hpp"
+#include "kbdhook/com_thread.hpp"
 #include "kbdhook/keyboard_hook.hpp"
 #include "kbdhook/player.hpp"
 
-unifex::task<void> clickety(Player& player, unifex::inplace_stop_token token) {
-  keyboard_hook keyboard{token};
-
+unifex::task<void> clickety(Player& player, keyboard_hook& keyboard) {
   for (auto next : keyboard.events()) {
-    auto evt = co_await next;
+    auto evt = co_await unifex::done_as_optional(std::move(next));
     if (!evt) {
       break;
     }
@@ -45,21 +50,33 @@ unifex::task<void> clickety(Player& player, unifex::inplace_stop_token token) {
 }
 
 int wmain() {
+  printf("main start\n");
+  unifex::scope_guard mainExit{[]() noexcept {
+    printf("main exit\n");
+  }};
   using namespace std::literals::chrono_literals;
 
   unifex::timed_single_thread_context time;
   unifex::manual_event_loop loop;
   com_thread com{loop, time.get_scheduler(), 50ms};
 
-  unifex::inplace_stop_source stopSource;
-  clean_stop exit{stopSource};
+  clean_stop exit{com.get_scheduler()};
+  Player player{com.get_scheduler()};
+  keyboard_hook keyboard{com.get_scheduler()};
 
-  Player player;
+  // start
+  unifex::sync_wait(unifex::when_all(
+      unifex::sequence(exit.start(), player.start(), keyboard.start())));
 
-  unifex::sync_wait(clickety(player, stopSource.get_token()));
+  unifex::sync_wait(
+      clickety(player, keyboard) |
+      unifex::stop_when(unifex::sequence(
+          unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
+          exit.event())));
 
-  player.join();
+  // stop
+  unifex::sync_wait(unifex::when_all(
+      unifex::sequence(keyboard.destroy(), player.destroy(), exit.destroy())));
+
   com.join();
-
-  printf("main exit\n");
 }

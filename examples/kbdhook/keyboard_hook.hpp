@@ -16,9 +16,14 @@
 
 #pragma once
 
-#include <unifex/inplace_stop_token.hpp>
+#include <unifex/just_from.hpp>
+#include <unifex/manual_event_loop.hpp>
+#include <unifex/scheduler_concepts.hpp>
+#include <unifex/sender_concepts.hpp>
+#include <unifex/sequence.hpp>
 
 #include "kbdhook/sender_range.hpp"
+#include "kbdhook/com_thread.hpp"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -28,79 +33,71 @@
 
 template <typename Fn>
 struct _keyboard_hook {
+  using scheduler_t = decltype(std::declval<com_thread>().get_scheduler());
+
   Fn& fn_;
+  scheduler_t uiLoop_;
   unifex::inplace_stop_token token_;
   HHOOK hHook_;
-  std::thread msgThread_;
 
   static inline std::atomic<_keyboard_hook*> self_{nullptr};
 
-  explicit _keyboard_hook(Fn& fn, unifex::inplace_stop_token token)
-    : fn_(fn)
-    , token_(token)
-    , hHook_(NULL)
-    , msgThread_(
-          [](_keyboard_hook* self) noexcept {
-            _keyboard_hook* empty = nullptr;
-            if (!self_.compare_exchange_strong(empty, self)) {
-              std::terminate();
-            }
-
-            self->hHook_ =
-                SetWindowsHookExW(WH_KEYBOARD_LL, &KbdHookProc, NULL, NULL);
-            if (!self->hHook_) {
-              LPCWSTR message = nullptr;
-              FormatMessageW(
-                  FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-                      FORMAT_MESSAGE_IGNORE_INSERTS,
-                  NULL,
-                  GetLastError(),
-                  0,
-                  (LPWSTR)&message,
-                  128,
-                  nullptr);
-
-              printf("failed to set keyboard hook\n");
-              printf("Error: %S\n", message);
-              LocalFree((HLOCAL)message);
-              std::terminate();
-            }
-            printf("keyboard hook set\n");
-
-            MSG msg{};
-            while (GetMessageW(&msg, NULL, 0, 0) &&
-                   !self->token_.stop_requested()) {
-              DispatchMessageW(&msg);
-            }
-
-            bool result =
-                UnhookWindowsHookEx(std::exchange(self->hHook_, (HHOOK)NULL));
-            if (!result) {
-              std::terminate();
-            }
-
-            _keyboard_hook* expired = self;
-            if (!self_.compare_exchange_strong(expired, nullptr)) {
-              std::terminate();
-            }
-
-            printf("keyboard hook removed\n");
-          },
-          this) {}
-
-  void join() {
-    if (msgThread_.joinable()) {
-      PostThreadMessageW(
-          GetThreadId(msgThread_.native_handle()), WM_QUIT, 0, 0L);
-      try {
-        // there is a race in the windows thread implementation :(
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        if (msgThread_.joinable()) {
-          msgThread_.join();
-        }
-      } catch (...) {
-      }
+  ~_keyboard_hook() {
+    if (!!hHook_) {
+      // must call destroy()
+      std::terminate();
     }
+  }
+  explicit _keyboard_hook(Fn& fn, scheduler_t uiLoop)
+    : fn_(fn)
+    , uiLoop_(uiLoop)
+    , hHook_(NULL) {}
+
+  [[nodiscard]] auto start() {
+    return unifex::sequence(
+        unifex::schedule(uiLoop_), unifex::just_from([this]() noexcept {
+          _keyboard_hook* empty = nullptr;
+          if (!self_.compare_exchange_strong(empty, this)) {
+            std::terminate();
+          }
+
+          hHook_ = SetWindowsHookExW(WH_KEYBOARD_LL, &KbdHookProc, NULL, NULL);
+          if (!hHook_) {
+            LPCWSTR message = nullptr;
+            FormatMessageW(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                    FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL,
+                GetLastError(),
+                0,
+                (LPWSTR)&message,
+                128,
+                nullptr);
+
+            printf("failed to set keyboard hook\n");
+            printf("Error: %S\n", message);
+            LocalFree((HLOCAL)message);
+            std::terminate();
+          }
+          printf("keyboard hook set\n");
+        }));
+  }
+
+  [[nodiscard]] auto destroy() {
+    return unifex::sequence(
+        unifex::schedule(uiLoop_), unifex::just_from([this]() noexcept {
+          bool result = UnhookWindowsHookEx(std::exchange(hHook_, (HHOOK)NULL));
+          if (!result) {
+            std::terminate();
+          }
+
+          _keyboard_hook* expired = this;
+          if (!self_.compare_exchange_strong(expired, nullptr)) {
+            std::terminate();
+          }
+
+          printf("keyboard hook removed\n");
+        }));
   }
 
   static LRESULT CALLBACK
@@ -118,33 +115,42 @@ struct _keyboard_hook {
 namespace detail {
 // create a range of senders where each sender completes on the next
 // keyboard press
-auto keyboard_events(unifex::inplace_stop_token token) {
-  static auto register_ = [token](auto& fn) noexcept {
-    return _keyboard_hook<decltype(fn)>{fn, token};
+template <typename Scheduler>
+auto keyboard_events(Scheduler uiLoop) {
+  static auto register_ = [uiLoop](auto& fn) noexcept {
+    return _keyboard_hook<decltype(fn)>{fn, uiLoop};
   };
   static auto unregister_ = [](auto& r) noexcept {
-    r.join();
+    // caller is responsible for destroy()
   };
   return std::make_pair(register_, unregister_);
 }
 }  // namespace detail
 class keyboard_hook {
-  using fns = decltype(detail::keyboard_events(
-      std::declval<unifex::inplace_stop_token&>()));
+  using scheduler_t =
+      decltype(std::declval<com_thread>().get_scheduler());
+  using fns = decltype(detail::keyboard_events(std::declval<scheduler_t&>()));
   using RangeType = sender_range<
       WPARAM,
       unifex::inplace_stop_token,
       typename fns::first_type,
       typename fns::second_type>;
 
+  unifex::inplace_stop_source stopSource_;
   RangeType range_;
 
 public:
-  explicit keyboard_hook(unifex::inplace_stop_token token)
+  explicit keyboard_hook(scheduler_t uiLoop)
     : range_(
-          token,
-          detail::keyboard_events(token).first,
-          detail::keyboard_events(token).second) {}
+          stopSource_.get_token(),
+          detail::keyboard_events(uiLoop).first,
+          detail::keyboard_events(uiLoop).second) {}
+
+  unifex::inplace_stop_source& get_stop_source() { return stopSource_; }
+  void request_stop() { stopSource_.request_stop(); }
+
+  [[nodiscard]] auto start() { return range_.get_registration()->start(); }
+  [[nodiscard]] auto destroy() { return range_.get_registration()->destroy(); }
 
   auto events() { return range_.view(); }
 };
