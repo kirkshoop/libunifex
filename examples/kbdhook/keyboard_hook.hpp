@@ -118,7 +118,7 @@ namespace detail {
 template <typename Scheduler>
 auto keyboard_events(Scheduler uiLoop) {
   static auto register_ = [uiLoop](auto& fn) noexcept {
-    return _keyboard_hook<decltype(fn)>{fn, uiLoop};
+    return _keyboard_hook{fn, uiLoop};
   };
   static auto unregister_ = [](auto& r) noexcept {
     // caller is responsible for destroy()

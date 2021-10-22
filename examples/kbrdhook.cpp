@@ -14,23 +14,15 @@
  * limitations under the License.
  */
 
-#include <unifex/coroutine.hpp>
 #include <unifex/done_as_optional.hpp>
-#include <unifex/inplace_stop_token.hpp>
-#include <unifex/let_done.hpp>
-#include <unifex/let_value.hpp>
-#include <unifex/manual_event_loop.hpp>
 #include <unifex/scope_guard.hpp>
-#include <unifex/sender_concepts.hpp>
 #include <unifex/sequence.hpp>
 #include <unifex/sync_wait.hpp>
 #include <unifex/task.hpp>
-#include <unifex/timed_single_thread_context.hpp>
-#include <unifex/when_all.hpp>
 
 #include <cassert>
 #include <chrono>
-#include <optional>
+#include <ranges>
 
 #include "kbdhook/clean_stop.hpp"
 #include "kbdhook/com_thread.hpp"
@@ -38,8 +30,12 @@
 #include "kbdhook/player.hpp"
 
 unifex::task<void> clickety(Player& player, keyboard_hook& keyboard) {
-  for (auto next : keyboard.events()) {
-    auto evt = co_await unifex::done_as_optional(std::move(next));
+  auto keystrikes =
+      keyboard.events() |
+      std::views::transform(unifex::done_as_optional);
+
+  for (auto next : keystrikes) {
+    auto evt = co_await next;
     if (!evt) {
       break;
     }
@@ -54,22 +50,26 @@ int wmain() {
   unifex::scope_guard mainExit{[]() noexcept {
     printf("main exit\n");
   }};
+
   using namespace std::literals::chrono_literals;
 
   com_thread com{50ms};
-  clean_stop exit{com.get_scheduler()};
+  clean_stop exit;
   Player player{com.get_scheduler()};
   keyboard_hook keyboard{com.get_scheduler()};
 
-  unifex::sync_wait(unifex::sequence(
+  unifex::sync_wait(
+    unifex::sequence(
       // start
-      unifex::sequence(exit.start(), player.start(), keyboard.start()),
+      player.start(),
+      keyboard.start(),
       unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
       // click
       clickety(player, keyboard) |
           unifex::stop_when(
               // until ctrl+C
               exit.event()),
-      // stop
-      unifex::sequence(keyboard.destroy(), player.destroy(), exit.destroy())));
+        // stop
+        keyboard.destroy(),
+        player.destroy()));
 }

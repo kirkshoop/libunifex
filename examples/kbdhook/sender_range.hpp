@@ -227,13 +227,13 @@ public:
   ~sender_range() noexcept { _unregister(); }
 
   auto view() {
-    struct sender_view {
+    struct sender_view : std::ranges::view_base {
       RangeType* range_;
 
       auto begin() { return range_->begin(); }
       auto end() { return range_->end(); }
     };
-    return sender_view{&range_};
+    return sender_view{{}, &range_};
   }
 
   auto& get_registration() { return registration_; }
