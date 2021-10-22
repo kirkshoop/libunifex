@@ -151,7 +151,7 @@ will default to returning the `sequenced_policy`.
 
 # Sender Factories
 
-### `create<ValueTypes...>(callable)`
+### `create<ValueTypes...>(callable, data...)`
 
 _Synopsis:_ A utility for building a sender-based async API out of a C-style async API
 that accepts a `void*` context and a callback.
@@ -177,14 +177,16 @@ be the list of value type(s) accepted by the callback (with the exception of the
 context). In the above example, since `callback_t` accepts an `int` as the result of the
 async computation, we pass `int` as the template argument to `create`.
 
-The first argument to `create` is a `void`-returning callable that accepts an lvalue
+The first argument to `create` is a callable that accepts an lvalue
 reference to an object whose type satisfies the `unifex::receiver_of<ValueTypes...>`
-concept. This function should dispatch to the C-style callback (see example).
+concept. This function should dispatch to the C-style callback (see example). The
+object returned from the callable (if any) is persisted in the returned sender's
+operation state.
 
-The second argument is an optional extra bit of data to be bundled with the receiver
-passed to the callable. E.g., if the first argument to `create` is a lambda that accepts
-`(auto& rec)` and the second argument is `42`, then from within the body of the lambda,
-the value of the expression `rec.context()` is `42`.
+Optional additional arguments represent data to be passed to the callable in addition
+to the receiver. E.g., if the first argument to `create` is a lambda that accepts
+`(auto& rec, std::string& data)` and the second argument is `"hello"`, then from within the
+body of the lambda, the value of the string `data` is `"hello"`.
 
 `create` returns a typed sender that, when connected and started, dispatches to the
 wrapped C-style API with the callback of your choosing. The receiver passed to the

@@ -151,103 +151,7 @@ struct _snd {
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
   };
-};
-
-template <typename Fn, typename... ValueTypes>
-struct simple_create {
-  remove_cvref_t<Fn> fn_;
-
-  template <
-      template <typename...>
-      class Variant,
-      template <typename...>
-      class Tuple>
-  using value_types = Variant<Tuple<ValueTypes...>>;
-
-  template <template <typename...> class Variant>
-  using error_types = Variant<std::exception_ptr>;
-
-  static inline constexpr bool sends_done = true;
-
-  template <typename Receiver, typename... Context>
-  struct state {
-    using context_t = std::tuple<Context...>;
-    using ref_context = std::tuple<Context&...>;
-    using cref_context = std::tuple<const Context&...>;
-    ~state() {}
-    explicit state(Fn fn, Receiver& rec, Context&... ctx) noexcept
-      : rec_(rec, ctx...)
-      , fn_(std::move(fn)) {
-      fn_(rec_);
-    }
-    state() = delete;
-    state(const state&) = delete;
-    state(state&&) = delete;
-
-    struct _receiver {
-      ~_receiver() { std::exchange(rec_, nullptr); }
-
-      explicit _receiver(Receiver& rec, Context&... ctx)
-        : rec_(&rec)
-        , ctx_(ctx...)
-        , cctx_(ctx...) {}
-
-      template(typename... Ts)                     //
-          (requires receiver_of<Receiver, Ts...>)  //
-          void set_value(Ts&&... ts) noexcept(
-              is_nothrow_receiver_of_v<Receiver, Ts...>) {
-        unifex::set_value((Receiver &&) * rec_, (Ts &&) ts...);
-      }
-
-      template(typename Error)                  //
-          (requires receiver<Receiver, Error>)  //
-          void set_error(Error&& error) noexcept {
-        unifex::set_error((Receiver &&) * rec_, (Error &&) error);
-      }
-
-      void set_done() noexcept { unifex::set_done((Receiver &&) * rec_); }
-
-      template(class Ctx = ref_context)(requires(sizeof...(Context) > 0))
-          ref_context const& context() & noexcept {
-        return ctx_;
-      }
-
-      template(class Ctx = ref_context)(requires(sizeof...(Context) > 0))
-          cref_context const& context() const& noexcept {
-        return cctx_;
-      }
-
-      template(class Ctx = ref_context)(
-          requires(sizeof...(Context) > 0)) context_t context() && noexcept {
-        return std::move(ctx_);
-      }
-
-    private:
-      // Forward other receiver queries
-      template(typename CPO)                          //
-          (requires is_receiver_query_cpo_v<CPO> AND  //
-               is_callable_v<CPO, const Receiver&>)   //
-          friend auto tag_invoke(CPO cpo, const _receiver& self) noexcept(
-              is_nothrow_callable_v<CPO, const Receiver&>)
-              -> callable_result_t<CPO, const Receiver&> {
-        return std::move(cpo)(*self.rec_);
-      }
-
-      Receiver* rec_;
-      ref_context ctx_;
-      cref_context cctx_;
-    };
-
-  private:
-    _receiver rec_;
-    Fn fn_;
-  };
-
-  template <typename Receiver, typename... Context>
-  state<Receiver, Context...> operator()(Receiver& rec, Context&... ctx) {
-    return state<Receiver, Context...>{fn_, rec, ctx...};
-  }
-};
+}
 
 template <typename Fn, typename... Context>
 using _sender = typename _snd<std::decay_t<Fn>, std::decay_t<Context>...>::type;
@@ -274,17 +178,41 @@ struct _fn {
 };
 template <typename... ValueTypes>
 struct _fn_simple {
+  template <typename Fn>
+  struct creator {
+      template <
+          template <typename...>
+          class Variant,
+          template <typename...>
+          class Tuple>
+      using value_types = Variant<Tuple<ValueTypes...>>;
+    
+      template <template <typename...> class Variant>
+      using error_types = Variant<std::exception_ptr>;
+    
+      static inline constexpr bool sends_done = true;
+
+      template(typename... Args)//
+        (requires callable<Fn&, Args...>) //
+      callable_result_t<Fn&, Args...> operator()(Args&&... args) //
+        noexcept(is_nothrow_callable_v<Fn&, Args...>) { //
+        return fn_((Args&&) args...);
+      }
+
+      Fn fn_;
+  };
+
   template(typename Fn, typename... Context)  //
       (requires move_constructible<Fn> AND    //
        (move_constructible<Context>&&...))    //
-      _sender<simple_create<Fn, ValueTypes...>, Context...>
+      _sender<creator<Fn>, Context...>
       operator()(Fn fn, Context&&... ctx) const
       noexcept(std::is_nothrow_constructible_v<
-               _sender<simple_create<Fn, ValueTypes...>, Context...>,
-               simple_create<Fn, ValueTypes...>,
+               _sender<creator<Fn>, Context...>,
+               creator<Fn>,
                Context...>) {
-    return _sender<simple_create<Fn, ValueTypes...>, Context...>{
-        simple_create<Fn, ValueTypes...>{(Fn &&) fn}, (Context &&) ctx...};
+    return _sender<creator<Fn>, Context...>{
+        creator<Fn>{(Fn &&) fn}, (Context &&) ctx...};
   }
 };
 }  // namespace _cpo
@@ -321,7 +249,7 @@ struct _fn_simple {
  * function object or the constructor of the returned state object, could
  * dispatch to a C-style callback (see example).
  * \param[in] ctx... optional
- * extra data to be bundled with the receiver passed to \c fn. E.g., \c fn is a
+ * extra data to be passed to \c fn. E.g., \c fn is a
  * lambda that accepts <tt>(auto& rec, decltype(ctx)&...)</tt>.
  * \return A sender that, when connected and started, dispatches to the wrapped
  * C-style API with the callback of your choosing. The receiver passed to \c fn

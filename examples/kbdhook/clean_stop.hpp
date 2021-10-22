@@ -49,7 +49,6 @@ struct clean_stop {
   }
   static BOOL WINAPI consoleHandler(DWORD signal) {
     if (signal == CTRL_C_EVENT) {
-      printf("\n");  // end the line of '.'
       set_value_fn_.load()(receiver_.load());
     }
     return TRUE;
