@@ -57,7 +57,6 @@ int wmain() {
   using namespace std::literals::chrono_literals;
 
   com_thread com{50ms};
-
   clean_stop exit{com.get_scheduler()};
   Player player{com.get_scheduler()};
   keyboard_hook keyboard{com.get_scheduler()};
@@ -65,11 +64,12 @@ int wmain() {
   unifex::sync_wait(unifex::sequence(
       // start
       unifex::sequence(exit.start(), player.start(), keyboard.start()),
+      unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
       // click
       clickety(player, keyboard) |
-          unifex::stop_when(unifex::sequence(
-              unifex::just_from([]() { printf("press ctrl-C to stop...\n"); }),
-              exit.event())),
+          unifex::stop_when(
+              // until ctrl+C
+              exit.event()),
       // stop
       unifex::sequence(keyboard.destroy(), player.destroy(), exit.destroy())));
 }
