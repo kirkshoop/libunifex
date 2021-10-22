@@ -39,17 +39,16 @@ struct com_thread {
   using time_scheduler_t =
       decltype(std::declval<unifex::timed_single_thread_context>()
                    .get_scheduler());
-  time_scheduler_t time_;
   using duration_t =
       typename unifex::timed_single_thread_context::clock_t::duration;
   duration_t maxTime_;
+  unifex::timed_single_thread_context time_;
   unifex::manual_event_loop run_;
   std::thread comThread_;
   ~com_thread() { join(); }
   com_thread() = delete;
-  explicit com_thread(time_scheduler_t time, duration_t maxTime)
-    : time_(std::move(time))
-    , maxTime_(maxTime)
+  explicit com_thread(duration_t maxTime)
+    : maxTime_(maxTime)
     , comThread_([this]() noexcept {
       {  // create message queue
         MSG msg;
@@ -83,7 +82,8 @@ struct com_thread {
         DispatchMessage(&msg);
         unifex::sync_wait(
             run_.run_as_sender() |
-            unifex::stop_when(unifex::schedule_after(time_, maxTime_)));
+            unifex::stop_when(
+                unifex::schedule_after(time_.get_scheduler(), maxTime_)));
       }
     }) {}
   struct make_sender {

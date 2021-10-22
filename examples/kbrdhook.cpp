@@ -56,8 +56,7 @@ int wmain() {
   }};
   using namespace std::literals::chrono_literals;
 
-  unifex::timed_single_thread_context time;
-  com_thread com{time.get_scheduler(), 50ms};
+  com_thread com{50ms};
 
   clean_stop exit{com.get_scheduler()};
   Player player{com.get_scheduler()};
