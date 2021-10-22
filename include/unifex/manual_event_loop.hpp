@@ -16,12 +16,12 @@
 #pragma once
 
 #include <unifex/blocking.hpp>
-#include <unifex/get_stop_token.hpp>
-#include <unifex/receiver_concepts.hpp>
-#include <unifex/stop_token_concepts.hpp>
-#include <unifex/inplace_stop_token.hpp>
-#include <unifex/unstoppable_token.hpp>
 #include <unifex/create.hpp>
+#include <unifex/get_stop_token.hpp>
+#include <unifex/inplace_stop_token.hpp>
+#include <unifex/sender_concepts.hpp>
+#include <unifex/stop_token_concepts.hpp>
+#include <unifex/unstoppable_token.hpp>
 
 #include <condition_variable>
 #include <mutex>
@@ -36,13 +36,9 @@ class context;
 struct task_base {
   using execute_fn = void(task_base*) noexcept;
 
-  explicit task_base(execute_fn* execute) noexcept
-  : execute_(execute)
-  {}
+  explicit task_base(execute_fn* execute) noexcept : execute_(execute) {}
 
-  void execute() noexcept {
-    this->execute_(this);
-  }
+  void execute() noexcept { this->execute_(this); }
 
   task_base* next_ = nullptr;
   execute_fn* execute_;
@@ -59,7 +55,7 @@ template <typename Receiver>
 class _op<Receiver>::type final : task_base {
   using stop_token_type = stop_token_type_t<Receiver&>;
 
- public:
+public:
   template <typename Receiver2>
   explicit type(Receiver2&& receiver, context* loop)
     : task_base(&type::execute_impl)
@@ -68,7 +64,7 @@ class _op<Receiver>::type final : task_base {
 
   void start() noexcept;
 
- private:
+private:
   static void execute_impl(task_base* t) noexcept {
     auto& self = *static_cast<type*>(t);
     if constexpr (is_stop_never_possible_v<stop_token_type>) {
@@ -89,19 +85,33 @@ class _op<Receiver>::type final : task_base {
 class context {
   template <class Receiver>
   friend struct _op;
- public:
+
+  bool run(unifex::inplace_stop_token token);
+  bool run(unifex::unstoppable_token token);
+
+  template <typename StopToken>
+  bool run(StopToken token) {
+    unifex::inplace_stop_source stopSource;
+    unifex::inplace_stop_callback forwardrequest{token, [&]() noexcept {
+                                                   stopSource.request_stop();
+                                                 }};
+    return run(stopSource.get_token());
+  }
+
+public:
   class scheduler {
     class schedule_task {
-      friend constexpr blocking_kind tag_invoke(
-          tag_t<blocking>,
-          const schedule_task&) noexcept {
+      friend constexpr blocking_kind
+      tag_invoke(tag_t<blocking>, const schedule_task&) noexcept {
         return blocking_kind::never;
       }
 
-     public:
+    public:
       template <
-          template <typename...> class Variant,
-          template <typename...> class Tuple>
+          template <typename...>
+          class Variant,
+          template <typename...>
+          class Tuple>
       using value_types = Variant<Tuple<>>;
 
       template <template <typename...> class Variant>
@@ -117,9 +127,7 @@ class context {
     private:
       friend scheduler;
 
-      explicit schedule_task(context* loop) noexcept
-        : loop_(loop)
-      {}
+      explicit schedule_task(context* loop) noexcept : loop_(loop) {}
 
       context* const loop_;
     };
@@ -128,10 +136,8 @@ class context {
 
     explicit scheduler(context* loop) noexcept : loop_(loop) {}
 
-   public:
-    schedule_task schedule() const noexcept {
-      return schedule_task{loop_};
-    }
+  public:
+    schedule_task schedule() const noexcept { return schedule_task{loop_}; }
 
     friend bool operator==(scheduler a, scheduler b) noexcept {
       return a.loop_ == b.loop_;
@@ -140,69 +146,41 @@ class context {
       return a.loop_ != b.loop_;
     }
 
-   private:
+  private:
     context* loop_;
   };
 
-  scheduler get_scheduler() {
-    return scheduler{this};
-  }
+  scheduler get_scheduler() { return scheduler{this}; }
 
   inline void run() { run(unifex::unstoppable_token{}); }
 
-  inline auto run_as_sender() { return unifex::create(make_run_sender{this}); }
-
-  void stop();
-
- private:
-  void enqueue(task_base* task);
-
-  struct make_run_sender {
-    template <
-        template <typename...>
-        class Variant,
-        template <typename...>
-        class Tuple>
-    using value_types = Variant<Tuple<>>;
-
-    template <template <typename...> class Variant>
-    using error_types = Variant<std::exception_ptr>;
-
-    static inline constexpr bool sends_done = false;
-
-    struct unused {};
-
-    context* self;
-    template<typename Receiver>
-    auto operator()(Receiver rec) {
+  inline auto run_as_sender() {
+    return unifex::create_simple<>([this](auto& rec) {
       try {
-        if constexpr (callable<unifex::tag_t<unifex::get_stop_token>, decltype(rec)>) {
-          if (self->run(unifex::get_stop_token(rec))) {
+        if constexpr (
+            callable<unifex::tag_t<unifex::get_stop_token>, decltype(rec)> &&
+            !unifex::is_stop_never_possible_v<unifex::callable_result_t<
+                unifex::tag_t<unifex::get_stop_token>,
+                decltype(rec)>>) {
+          auto token = unifex::get_stop_token(rec);
+          if (run(token)) {
             unifex::set_done(std::move(rec));
-            return unused{};
+            return;
           }
         } else {
-          self->run();
+          run();
         }
         unifex::set_value(std::move(rec));
       } catch (...) {
         unifex::set_error(std::move(rec), std::current_exception());
       }
-      return unused{};
-    }
-  };
-
-  bool run(unifex::inplace_stop_token token);
-  bool run(unifex::unstoppable_token token);
-
-  template <typename StopToken>
-  bool run(StopToken token) {
-    unifex::inplace_stop_source stopSource;
-    unifex::inplace_stop_callback forwardrequest{token, [&]() noexcept {
-                                                   stopSource.request_stop();
-                                                 }};
-    return run(stopSource.get_token());
+    });
   }
+
+  void stop();
+
+private:
+  void enqueue(task_base* task);
 
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -216,9 +194,9 @@ inline void _op<Receiver>::type::start() noexcept {
   loop_->enqueue(this);
 }
 
-} // namespace _manual_event_loop
+}  // namespace _manual_event_loop
 
 using manual_event_loop = _manual_event_loop::context;
-} // namespace unifex
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>
