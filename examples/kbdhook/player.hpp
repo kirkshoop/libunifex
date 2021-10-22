@@ -140,9 +140,6 @@ struct Player {
       if (FAILED(hr)) {
         std::terminate();
       }
-
-      printf(".");
-      fflush(stdout);
     }
 
     void ItemCreated(Player* player, IMFPMediaItem* pMediaItem) {
