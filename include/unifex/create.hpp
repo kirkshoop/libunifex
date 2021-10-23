@@ -151,7 +151,7 @@ struct _snd {
     UNIFEX_NO_UNIQUE_ADDRESS Fn fn_;
     UNIFEX_NO_UNIQUE_ADDRESS context_t ctx_;
   };
-}
+};
 
 template <typename Fn, typename... Context>
 using _sender = typename _snd<std::decay_t<Fn>, std::decay_t<Context>...>::type;

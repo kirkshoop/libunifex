@@ -23,6 +23,8 @@
 #include <unifex/sender_concepts.hpp>
 #include <unifex/unstoppable_token.hpp>
 
+#include "when_stop_requested.hpp"
+
 #include <optional>
 #include <ranges>
 
@@ -136,11 +138,6 @@ struct sender_range {
     state(state&&) = delete;
   };
 
-  struct stop_callback {
-    sender_range* range_;
-    void operator()() noexcept { range_->_unregister(); }
-  };
-
   // this function is used to provide a stable type for the expression inside
   // (that uses a lambda)
   static auto make_range(sender_range* self) {
@@ -204,7 +201,13 @@ public:
     return sender_view{{}, &range_};
   }
 
-  auto& get_registration() { return registration_; }
+  [[nodiscard]] auto start() {
+    return registration_->start() | //
+        when_stop_requested([this]() {
+          _unregister();
+        });
+  }
+  [[nodiscard]] auto destroy() { return registration_->destroy(); }
 
   auto begin() noexcept { return range_.begin(); }
   auto end() noexcept { return range_.end(); }

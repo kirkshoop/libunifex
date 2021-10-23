@@ -140,10 +140,10 @@ public:
           detail::keyboard_events(uiLoop).second) {}
 
   [[nodiscard]] auto start() {
-    return range_.get_registration()->start();
+    return range_.start();
   }
   [[nodiscard]] auto destroy() {
-    return range_.get_registration()->destroy();
+    return range_.destroy();
   }
 
   auto events() { return range_.view(); }
