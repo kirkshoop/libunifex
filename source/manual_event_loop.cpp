@@ -18,11 +18,27 @@
 namespace unifex {
 namespace _manual_event_loop {
 
-void context::run() {
+bool context::run(unifex::inplace_stop_token token) {
+  while (!token.stop_requested() && head_ != nullptr) {
+    std::unique_lock lock{mutex_};
+    auto* task = head_;
+    head_ = task->next_;
+    if (head_ == nullptr) {
+      tail_ = nullptr;
+    }
+    lock.unlock();
+    task->execute();
+    lock.lock();
+  }
+  return token.stop_requested() || stop_;
+}
+
+bool context::run(unifex::unstoppable_token) {
   std::unique_lock lock{mutex_};
   while (true) {
     while (head_ == nullptr) {
-      if (stop_) return;
+      if (stop_)
+        return false;
       cv_.wait(lock);
     }
     auto* task = head_;
@@ -34,6 +50,7 @@ void context::run() {
     task->execute();
     lock.lock();
   }
+  UNIFEX_ASSUME_UNREACHABLE;
 }
 
 void context::stop() {

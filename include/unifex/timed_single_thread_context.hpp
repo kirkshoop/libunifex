@@ -249,6 +249,8 @@ namespace _timed_single_thread_context {
     auto schedule() const noexcept {
       return schedule_after(std::chrono::milliseconds{0});
     }
+
+    clock_t::time_point now() { return clock_t::now(); }
   };
 } // namespace _timed_single_thread_context
 

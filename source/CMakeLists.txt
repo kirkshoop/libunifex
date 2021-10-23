@@ -67,7 +67,8 @@ configure_file(
 target_include_directories(unifex
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/>
-    "${PROJECT_BINARY_DIR}/include")
+    "${PROJECT_BINARY_DIR}/include"
+    "${UNIFEX_RANGES_INCLUDE_DIRS}")
 
 target_compile_features(unifex PUBLIC cxx_std_17)
 

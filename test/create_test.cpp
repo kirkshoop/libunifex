@@ -57,10 +57,10 @@ struct CreateTest : testing::Test {
 
 TEST_F(CreateTest, BasicTest) {
   auto snd = [this](int a, int b) {
-    return create<int>([a, b, this](auto& rec) {
+    return create_simple<int>([a, b, this](auto& rec) noexcept {
       static_assert(receiver_of<decltype(rec), int>);
-      anIntAPI(a, b, &rec, [](void* context, int result) {
-        unifex::void_cast<decltype(rec)>(context).set_value(result);
+      anIntAPI(a, b, &rec, +[](void* context, int result) noexcept {
+        unifex::set_value(unifex::void_cast<decltype(rec)>(context), result);
       });
     });
   }(1, 2);
@@ -73,12 +73,13 @@ TEST_F(CreateTest, BasicTest) {
 TEST_F(CreateTest, VoidWithContextTest) {
   bool called = false;
   auto snd = [&called, this]() {
-    return create<>([this](auto& rec) {
+    return create_simple<>([this](auto& rec) noexcept {
       static_assert(receiver_of<decltype(rec)>);
-      aVoidAPI(&rec, [](void* context) {
+      aVoidAPI(&rec, +[](void* context) noexcept {
         auto& rec2 = unifex::void_cast<decltype(rec)>(context);
-        rec2.context().get() = true;
-        rec2.set_value();
+        auto& [called] = rec2.context();
+        called.get() = true;
+        unifex::set_value(rec2);
       });
     },
     std::ref(called));
@@ -93,9 +94,10 @@ TEST_F(CreateTest, VoidWithContextTest) {
 
 TEST_F(CreateTest, AwaitTest) {
   auto tsk = [this](int a, int b) -> task<int> {
-    co_return co_await create<int>([a, b, this](auto& rec) {
-      anIntAPI(a, b, &rec, [](void* context, int result) {
-        unifex::void_cast<decltype(rec)>(context).set_value(result);
+    co_return co_await create_simple<int>([a, b, this](auto& rec) noexcept {
+      static_assert(receiver_of<decltype(rec), int>);
+      anIntAPI(a, b, &rec, +[](void* context, int result) noexcept {
+        unifex::set_value(unifex::void_cast<decltype(rec)>(context), result);
       });
     });
   }(1, 2);
