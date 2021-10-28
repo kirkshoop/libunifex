@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <unifex/tail_sender_concepts.hpp>
+#include <unifex/just.hpp>
+#include <unifex/resume_tail_sender.hpp>
+#include <unifex/sync_wait.hpp>
+#include <unifex/then.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -23,6 +26,35 @@
 using namespace unifex;
 using namespace std::chrono;
 using namespace std::chrono_literals;
+
+TEST(TailSender, Smoke) {
+  static_assert(tail_receiver<null_tail_receiver>);
+  static_assert(tail_sender<null_tail_sender>);
+  static_assert(
+      tail_operation<connect_result_t<null_tail_sender, null_tail_receiver>>);
+
+  static_assert(
+      same_as<decltype(as_tail_sender(null_tail_sender{})), null_tail_sender>);
+  static_assert(!same_as<decltype(as_tail_sender(just())), decltype(just())>);
+
+  static_assert(!tail_sender<decltype(just())>);
+  auto fn = []() noexcept {
+  };
+  static_assert(!tail_sender<decltype(just() | then(fn))>);
+
+  static_assert(tail_sender<decltype(as_tail_sender(just()))>);
+  constexpr bool justVoid = tail_sender<decltype(as_tail_sender(just()))>;
+  EXPECT_TRUE(justVoid);
+
+  static_assert(tail_sender<decltype(as_tail_sender(just(42)))>);
+  constexpr bool just42 = tail_sender<decltype(as_tail_sender(just(42)))>;
+  EXPECT_TRUE(just42);
+
+  static_assert(tail_sender<decltype(as_tail_sender(just() | then(fn)))>);
+  constexpr bool justThenVoid =
+      tail_sender<decltype(as_tail_sender(just() | then(fn)))>;
+  EXPECT_TRUE(justThenVoid);
+}
 
 // Straight line - with conditional
 
@@ -122,7 +154,7 @@ struct C4 : tail_sender_base {
 };
 static_assert(tail_sender_to<C4, null_tail_receiver>);
 
-TEST(TailSender, Smoke) {
+TEST(TailSender, Straight) {
   {
     std::string result;
     resume_tail_sender(C4{{}, &result}, null_tail_receiver{});
@@ -480,7 +512,7 @@ TEST(TailSender, Interleave) {
     std::cout << "result: " << result << "\n";
     EXPECT_EQ(
         result,
-        "[C4][==C3][==C3][C3][C2][FC1][FC2][RC5][RC4][RC3][==RC2][==RC2][RC2]["
-        "FC1][FC2][C1][FC3][FC2][RC1][RC3][FC4][FC3][FC4][==RC2]");
+        "[C4][==C3][C3][C2][FC1][FC2][RC5][RC4][RC3][==RC2][RC2][FC1][FC2]["
+        "C1][FC3][FC2][RC1][RC3][FC4][FC3][FC4][==RC2]");
   }
 }
