@@ -121,21 +121,13 @@ UNIFEX_CONCEPT _terminal_tail_sender_to =  //
     UNIFEX_FRAGMENT(unifex::_terminal_tail_sender_operation_start, T, Receiver);
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(                //
-    _tail_receiver_impl,                //
-    requires(T c)                       //
-    (unifex::set_done(std::move(c))));  //
-
-template <typename T>
 UNIFEX_CONCEPT _tail_receiver =
-    (unifex::receiver<T> &&
-     unifex::is_nothrow_callable_v<unifex::tag_t<unifex::set_value>, T> &&
+    (unifex::is_nothrow_receiver_of_v<T> &&
      std::is_nothrow_copy_constructible_v<T> &&
      std::is_nothrow_move_constructible_v<T> &&
      std::is_nothrow_copy_assignable_v<T> &&
      std::is_nothrow_move_assignable_v<T> &&
-     std::is_trivially_destructible_v<T> &&  //
-     UNIFEX_FRAGMENT(_tail_receiver_impl, T));
+     std::is_trivially_destructible_v<T>);
 
 struct null_tail_sender;
 

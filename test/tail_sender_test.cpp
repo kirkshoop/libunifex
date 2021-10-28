@@ -28,32 +28,33 @@ using namespace std::chrono;
 using namespace std::chrono_literals;
 
 TEST(TailSender, Smoke) {
-  static_assert(tail_receiver<null_tail_receiver>);
-  static_assert(tail_sender<null_tail_sender>);
-  static_assert(
-      tail_operation<connect_result_t<null_tail_sender, null_tail_receiver>>);
+  // basic concepts on null types
+  EXPECT_TRUE(tail_receiver<null_tail_receiver>);
+  EXPECT_TRUE(tail_sender<null_tail_sender>);
+  EXPECT_TRUE(bool(
+      tail_operation<connect_result_t<null_tail_sender, null_tail_receiver>>));
 
-  static_assert(
-      same_as<decltype(as_tail_sender(null_tail_sender{})), null_tail_sender>);
-  static_assert(!same_as<decltype(as_tail_sender(just())), decltype(just())>);
-
-  static_assert(!tail_sender<decltype(just())>);
-  auto fn = []() noexcept {
+  auto fn = [](auto...) noexcept {
   };
-  static_assert(!tail_sender<decltype(just() | then(fn))>);
 
-  static_assert(tail_sender<decltype(as_tail_sender(just()))>);
-  constexpr bool justVoid = tail_sender<decltype(as_tail_sender(just()))>;
-  EXPECT_TRUE(justVoid);
+  // as_tail_sender() only adapts non tail_sender types
+  EXPECT_TRUE(bool(
+      same_as<decltype(as_tail_sender(null_tail_sender{})), null_tail_sender>));
+  EXPECT_TRUE(
+      bool(same_as<decltype(as_tail_sender(just())), decltype(just())>));
+  EXPECT_TRUE(
+      bool(!same_as<decltype(as_tail_sender(just(42))), decltype(just(42))>));
+  EXPECT_TRUE(bool(same_as<
+                   decltype(as_tail_sender(just() | then(fn))),
+                   decltype(just() | then(fn))>));
 
-  static_assert(tail_sender<decltype(as_tail_sender(just(42)))>);
-  constexpr bool just42 = tail_sender<decltype(as_tail_sender(just(42)))>;
-  EXPECT_TRUE(just42);
+  // just() and then() work in tail_sender expressions
+  EXPECT_TRUE(tail_sender<decltype(just())>);
+  EXPECT_TRUE(bool(tail_sender<decltype(just() | then(fn))>));
+  EXPECT_TRUE(bool(tail_sender<decltype(just(42) | then(fn))>));
 
-  static_assert(tail_sender<decltype(as_tail_sender(just() | then(fn)))>);
-  constexpr bool justThenVoid =
-      tail_sender<decltype(as_tail_sender(just() | then(fn)))>;
-  EXPECT_TRUE(justThenVoid);
+  // as_tail_sender() can adapt many senders to satisfy tail_sender
+  EXPECT_TRUE(tail_sender<decltype(as_tail_sender(just(42)))>);
 }
 
 // Straight line - with conditional

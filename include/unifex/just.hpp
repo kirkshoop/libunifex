@@ -21,6 +21,8 @@
 #include <unifex/sender_concepts.hpp>
 #include <unifex/std_concepts.hpp>
 
+#include <unifex/variant_tail_sender.hpp>
+
 #include <exception>
 #include <tuple>
 #include <type_traits>
@@ -48,8 +50,8 @@ struct _op<Receiver, Values...>::type {
   type operator=(const type&) = delete;
   type operator=(type&&) = delete;
 
-  using tail_t = variant_tail_callable<
-      null_tail_callable,
+  using tail_t = variant_tail_sender<
+      null_tail_sender,
       callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>,
       callable_result_t<
           tag_t<unifex::set_error>,
@@ -67,7 +69,7 @@ struct _op<Receiver, Values...>::type {
             if constexpr (sender<tail>) {
               static_assert(!sender<tail>, "just: sender not yet supported");
             } else {
-              return result_or_null_tail_callable(
+              return result_or_null_tail_sender(
                   unifex::set_value,
                   (Receiver &&) receiver_,
                   (Values &&) values...);
@@ -83,13 +85,13 @@ struct _op<Receiver, Values...>::type {
       if constexpr (sender<tail>) {
         static_assert(!sender<tail>, "just: sender not yet supported");
       } else {
-        return {result_or_null_tail_callable(
+        return {result_or_null_tail_sender(
             unifex::set_error,
             (Receiver &&) receiver_,
             std::current_exception())};
       }
     }
-    return {null_tail_callable{}};
+    return {null_tail_sender{}};
   }
 };
 
