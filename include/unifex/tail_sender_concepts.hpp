@@ -192,9 +192,8 @@ struct tail_sender_base {
 
   template(typename T)                              //
       (requires derived_from<T, tail_sender_base>)  //
-      friend constexpr blocking_kind tag_invoke(
-          constexpr_value<tag_t<blocking>>,
-          constexpr_value<const T&>) noexcept {
+      friend constexpr blocking_kind
+      tag_invoke(tag_t<blocking>&, const T&) noexcept {
     return blocking_kind::always_inline;
   }
 };

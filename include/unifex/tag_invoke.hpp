@@ -29,6 +29,7 @@ void tag_invoke();
 
 template <typename T>
 union _u {
+  ~_u() noexcept {}
   constexpr _u() : i_(0) {}
   int i_;
   std::remove_reference_t<T> t_;
@@ -37,23 +38,22 @@ template <typename T>
 static inline _u<T> u_{};
 
 template <typename T>
-constexpr auto constexpr_value_of() {
-  return &u_<T>.t_;
+constexpr auto& constexpr_value_of() {
+  return u_<T>.t_;
 }
 
 template <typename T>
 struct _constexpr_value {
   using type = T;
   constexpr _constexpr_value() noexcept {}
-  constexpr _constexpr_value(T) noexcept {}
-  constexpr auto pointer() noexcept { return constexpr_value_of<T>(); }
+  constexpr _constexpr_value(T&) noexcept {}
 };
 
 template <typename CPO, typename Target, typename... As>
 inline constexpr auto _v = tag_invoke(
-    _constexpr_value<CPO>(),
-    _constexpr_value<Target>(),
-    _constexpr_value<As>()...);
+    constexpr_value_of<CPO>(),
+    constexpr_value_of<Target>(),
+    constexpr_value_of<As>()...);
 
 struct _fn {
   template <typename CPO, typename... Args>

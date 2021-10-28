@@ -66,6 +66,9 @@ template <typename... Cs>
 struct _variant_tail_sender : tail_sender_base {
   static_assert(sizeof...(Cs) >= 2);
   static_assert(types_are_unique_v<Cs...>);
+  static_assert(all_true<_tail_sender<Cs>...>);
+  static_assert(
+      all_true<(unifex::blocking_v<Cs> == blocking_kind::always_inline)...>);
 
   ~_variant_tail_sender() noexcept { reset(); }
 
@@ -116,9 +119,11 @@ struct _variant_tail_sender : tail_sender_base {
     return *this;
   }
 
-  template(typename... OtherCs)                 //
-      (requires                                 //
-       (all_true<_tail_sender<OtherCs>...>) &&  //
+  template(typename... OtherCs)  //
+      (requires                  //
+       (all_true<
+           (unifex::blocking_v<Cs> == blocking_kind::always_inline)...>) &&  //
+       (all_true<_tail_sender<OtherCs>...>)&&                                //
        (all_true<one_of<
             replace_void_with_null_tail_sender<OtherCs>,
             replace_void_with_null_tail_sender<Cs>...>...>))  //
@@ -282,10 +287,10 @@ struct _variant_tail_sender : tail_sender_base {
         });
   }
 
-  friend constexpr blocking_kind
-  tag_invoke(tag_t<blocking>, const _variant_tail_sender<Cs...>&) noexcept {
-    constexpr auto kind = (unifex::blocking(std::declval<const Cs&>()) && ...);
-    return kind;
+  friend constexpr blocking_kind tag_invoke(
+      constexpr_value<tag_t<blocking>>,
+      constexpr_value<const _variant_tail_sender<Cs...>&>) noexcept {
+    return blocking_kind::always_inline;
   }
 
 private:
