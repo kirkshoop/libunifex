@@ -16,9 +16,9 @@
 #pragma once
 
 #include <unifex/config.hpp>
+#include <unifex/blocking.hpp>
 #include <unifex/receiver_concepts.hpp>
 #include <unifex/sender_concepts.hpp>
-#include <unifex/blocking.hpp>
 #include <unifex/std_concepts.hpp>
 
 #include <exception>
@@ -43,28 +43,51 @@ struct _op<Receiver, Values...>::type {
   UNIFEX_NO_UNIQUE_ADDRESS std::tuple<Values...> values_;
   UNIFEX_NO_UNIQUE_ADDRESS Receiver receiver_;
 
+  type(const type&) = delete;
+  type(type&&) = delete;
+  type operator=(const type&) = delete;
+  type operator=(type&&) = delete;
+
   using tail_t = variant_tail_callable<
       null_tail_callable,
       callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>,
-      callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>>;
+      callable_result_t<
+          tag_t<unifex::set_error>,
+          Receiver,
+          std::exception_ptr>>;
 
   tail_t start() & noexcept {
     UNIFEX_TRY {
       return {std::apply(
           [&](Values&&... values) -> tail_t {
-            using tail = callable_result_t<tag_t<unifex::set_value>, Receiver, Values...>;
-            if constexpr (sender<tail>) {static_assert(!sender<tail>, "just: sender not yet supported");}
-            else {
-              return result_or_null_tail_callable(unifex::set_value, (Receiver &&) receiver_, (Values &&) values...);
+            using tail = callable_result_t<
+                tag_t<unifex::set_value>,
+                Receiver,
+                Values...>;
+            if constexpr (sender<tail>) {
+              static_assert(!sender<tail>, "just: sender not yet supported");
+            } else {
+              return result_or_null_tail_callable(
+                  unifex::set_value,
+                  (Receiver &&) receiver_,
+                  (Values &&) values...);
             }
           },
           std::move(values_))};
-    } UNIFEX_CATCH (...) {
-      using tail = callable_result_t<tag_t<unifex::set_error>, Receiver, std::exception_ptr>;
-      if constexpr (sender<tail>) {static_assert(!sender<tail>, "just: sender not yet supported");}
-      else {
-        return {result_or_null_tail_callable(unifex::set_error, (Receiver &&) receiver_, std::current_exception())};
-      } 
+    }
+    UNIFEX_CATCH(...) {
+      using tail = callable_result_t<
+          tag_t<unifex::set_error>,
+          Receiver,
+          std::exception_ptr>;
+      if constexpr (sender<tail>) {
+        static_assert(!sender<tail>, "just: sender not yet supported");
+      } else {
+        return {result_or_null_tail_callable(
+            unifex::set_error,
+            (Receiver &&) receiver_,
+            std::current_exception())};
+      }
     }
     return {null_tail_callable{}};
   }
@@ -81,10 +104,12 @@ template <typename... Values>
 class _sender<Values...>::type {
   UNIFEX_NO_UNIQUE_ADDRESS std::tuple<Values...> values_;
 
-  public:
+public:
   template <
-      template <typename...> class Variant,
-      template <typename...> class Tuple>
+      template <typename...>
+      class Variant,
+      template <typename...>
+      class Tuple>
   using value_types = Variant<Tuple<Values...>>;
 
   template <template <typename...> class Variant>
@@ -92,41 +117,64 @@ class _sender<Values...>::type {
 
   static constexpr bool sends_done = false;
 
-  template(typename... Values2)
-    (requires (sizeof...(Values2) == sizeof...(Values)) AND
-      constructible_from<std::tuple<Values...>, Values2...>)
-  explicit type(std::in_place_t, Values2&&... values)
-    noexcept(std::is_nothrow_constructible_v<std::tuple<Values...>, Values2...>)
+  template(typename... Values2)                       //
+      (requires                                       //
+       (sizeof...(Values2) == sizeof...(Values)) AND  //
+       (constructible_from<
+           std::tuple<Values...>,
+           Values2...>))                                   //
+      explicit type(std::in_place_t, Values2&&... values)  //
+      noexcept(
+          std::is_nothrow_constructible_v<std::tuple<Values...>, Values2...>)
     : values_((Values2 &&) values...) {}
 
-  template(typename This, typename Receiver)
-      (requires same_as<remove_cvref_t<This>, type> AND
-        receiver<Receiver> AND
-        constructible_from<std::tuple<Values...>, member_t<This, std::tuple<Values...>>>)
-  friend auto tag_invoke(tag_t<connect>, This&& that, Receiver&& r)
-      noexcept(std::is_nothrow_constructible_v<std::tuple<Values...>, member_t<This, std::tuple<Values...>>>)
-      -> operation<Receiver, Values...> {
+  template(typename This, typename Receiver)                               //
+      (requires                                                            //
+       (same_as<remove_cvref_t<This>, type>) AND                           //
+       (receiver<Receiver>) AND                                            //
+       (is_callable_v<tag_t<unifex::set_value>, Receiver, Values...>) AND  //
+       (constructible_from<
+           std::tuple<Values...>,
+           member_t<
+               This,
+               std::tuple<Values...>>>))  //
+      friend auto tag_invoke(
+          tag_t<connect>,
+          This&& that,
+          Receiver&& r)  //
+      noexcept(          //
+          (is_nothrow_callable_v<
+              tag_t<unifex::set_value>,
+              Receiver,
+              Values...>)&&  //
+          (std::is_nothrow_constructible_v<
+              std::tuple<Values...>,
+              member_t<This, std::tuple<Values...>>>))
+          -> operation<Receiver, Values...> {
     return {static_cast<This&&>(that).values_, static_cast<Receiver&&>(r)};
   }
 
-  friend constexpr blocking_kind tag_invoke(tag_t<blocking>, const type&) noexcept {
+  friend constexpr blocking_kind
+  tag_invoke(tag_t<blocking>, const type&) noexcept {
     return blocking_kind::always_inline;
   }
 };
-} // namespace _just
+}  // namespace _just
 
 namespace _just_cpo {
-  inline const struct just_fn {
-    template <typename... Values>
-    constexpr auto operator()(Values&&... values) const
-      noexcept(std::is_nothrow_constructible_v<_just::sender<Values...>, std::in_place_t, Values...>)
-      -> _just::sender<Values...> {
-      return _just::sender<Values...>{std::in_place, (Values&&)values...};
-    }
-  } just{};
-} // namespace _just_cpo
+inline const struct just_fn {
+  template <typename... Values>
+  constexpr auto operator()(Values&&... values) const
+      noexcept(std::is_nothrow_constructible_v<
+               _just::sender<Values...>,
+               std::in_place_t,
+               Values...>) -> _just::sender<Values...> {
+    return _just::sender<Values...>{std::in_place, (Values &&) values...};
+  }
+} just{};
+}  // namespace _just_cpo
 using _just_cpo::just;
 
-} // namespace unifex
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>
