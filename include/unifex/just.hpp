@@ -66,7 +66,7 @@ struct _op<Receiver, Values...>::type {
                 tag_t<unifex::set_value>,
                 Receiver,
                 Values...>;
-            if constexpr (sender<tail>) {
+            if constexpr (!tail_sender<tail>) {
               static_assert(!sender<tail>, "just: sender not yet supported");
             } else {
               return result_or_null_tail_sender(
@@ -82,7 +82,7 @@ struct _op<Receiver, Values...>::type {
           tag_t<unifex::set_error>,
           Receiver,
           std::exception_ptr>;
-      if constexpr (sender<tail>) {
+      if constexpr (!tail_sender<tail>) {
         static_assert(!sender<tail>, "just: sender not yet supported");
       } else {
         return {result_or_null_tail_sender(
@@ -156,8 +156,8 @@ public:
     return {static_cast<This&&>(that).values_, static_cast<Receiver&&>(r)};
   }
 
-  friend constexpr blocking_kind
-  tag_invoke(tag_t<blocking>, const type&) noexcept {
+  friend constexpr blocking_kind tag_invoke(
+      constexpr_value<tag_t<blocking>>, constexpr_value<const type&>) noexcept {
     return blocking_kind::always_inline;
   }
 };

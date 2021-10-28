@@ -19,94 +19,131 @@
 #include <unifex/type_traits.hpp>
 #include <unifex/detail/concept_macros.hpp>
 
+#include <unifex/std_concepts.hpp>
+
 #include <unifex/detail/prologue.hpp>
 
 namespace unifex {
-  namespace _tag_invoke {
-    void tag_invoke();
+namespace _tag_invoke {
+void tag_invoke();
 
-    struct _fn {
-      template <typename CPO, typename... Args>
-      constexpr auto operator()(CPO cpo, Args&&... args) const
-          noexcept(noexcept(tag_invoke((CPO &&) cpo, (Args &&) args...)))
+template <typename T>
+union _u {
+  constexpr _u() : i_(0) {}
+  int i_;
+  std::remove_reference_t<T> t_;
+};
+template <typename T>
+static inline _u<T> u_{};
+
+template <typename T>
+constexpr auto constexpr_value_of() {
+  return &u_<T>.t_;
+}
+
+template <typename T>
+struct _constexpr_value {
+  using type = T;
+  constexpr _constexpr_value() noexcept {}
+  constexpr _constexpr_value(T) noexcept {}
+  constexpr auto pointer() noexcept { return constexpr_value_of<T>(); }
+};
+
+template <typename CPO, typename Target, typename... As>
+inline constexpr auto _v = tag_invoke(
+    _constexpr_value<CPO>(),
+    _constexpr_value<Target>(),
+    _constexpr_value<As>()...);
+
+struct _fn {
+  template <typename CPO, typename... Args>
+  constexpr auto operator()(CPO cpo, Args&&... args) const
+      noexcept(noexcept(tag_invoke((CPO &&) cpo, (Args &&) args...)))
           -> decltype(tag_invoke((CPO &&) cpo, (Args &&) args...)) {
-        return tag_invoke((CPO &&) cpo, (Args &&) args...);
-      }
-    };
-
-    template <typename CPO, typename... Args>
-    using tag_invoke_result_t = decltype(
-        tag_invoke(UNIFEX_DECLVAL(CPO &&), UNIFEX_DECLVAL(Args &&)...));
-
-    using yes_type = char;
-    using no_type = char(&)[2];
-
-    template <typename CPO, typename... Args>
-    auto try_tag_invoke(int) //
-        noexcept(noexcept(tag_invoke(
-            UNIFEX_DECLVAL(CPO &&), UNIFEX_DECLVAL(Args &&)...)))
-        -> decltype(static_cast<void>(tag_invoke(
-            UNIFEX_DECLVAL(CPO &&), UNIFEX_DECLVAL(Args &&)...)), yes_type{});
-
-    template <typename CPO, typename... Args>
-    no_type try_tag_invoke(...) noexcept(false);
-
-    template <template <typename...> class T, typename... Args>
-    struct defer {
-      using type = T<Args...>;
-    };
-
-    struct empty {};
-  }  // namespace _tag_invoke
-
-  namespace _tag_invoke_cpo {
-    inline constexpr _tag_invoke::_fn tag_invoke{};
+    return tag_invoke((CPO &&) cpo, (Args &&) args...);
   }
-  using namespace _tag_invoke_cpo;
+};
 
-  template <auto& CPO>
-  using tag_t = remove_cvref_t<decltype(CPO)>;
+template <typename CPO, typename... Args>
+using tag_invoke_result_t =
+    decltype(tag_invoke(UNIFEX_DECLVAL(CPO &&), UNIFEX_DECLVAL(Args&&)...));
 
-  // Manually implement the traits here rather than defining them in terms of
-  // the corresponding std::invoke_result/is_invocable/is_nothrow_invocable
-  // traits to improve compile-times. We don't need all of the generality of the
-  // std:: traits and the tag_invoke traits are used heavily through libunifex
-  // so optimising them for compile time makes a big difference.
+using yes_type = char;
+using no_type = char (&)[2];
 
-  using _tag_invoke::tag_invoke_result_t;
+template <typename CPO, typename... Args>
+constexpr auto try_tag_invoke(int)  //
+    noexcept(
+        noexcept(tag_invoke(UNIFEX_DECLVAL(CPO&&), UNIFEX_DECLVAL(Args&&)...)))
+        -> decltype(
+            static_cast<void>(
+                tag_invoke(UNIFEX_DECLVAL(CPO &&), UNIFEX_DECLVAL(Args&&)...)),
+            yes_type{});
 
-  template <typename CPO, typename... Args>
-  inline constexpr bool is_tag_invocable_v =
-      (sizeof(_tag_invoke::try_tag_invoke<CPO, Args...>(0)) ==
-       sizeof(_tag_invoke::yes_type));
+template <typename CPO, typename... Args>
+constexpr no_type try_tag_invoke(...) noexcept(false);
 
-  template <typename CPO, typename... Args>
-  struct tag_invoke_result
-    : conditional_t<
-          is_tag_invocable_v<CPO, Args...>,
-          _tag_invoke::defer<tag_invoke_result_t, CPO, Args...>,
-          _tag_invoke::empty> 
-  {};
+template <template <typename...> class T, typename... Args>
+struct defer {
+  using type = T<Args...>;
+};
 
-  template <typename CPO, typename... Args>
-  using is_tag_invocable = std::bool_constant<is_tag_invocable_v<CPO, Args...>>;
+struct empty {};
+}  // namespace _tag_invoke
 
-  template <typename CPO, typename... Args>
-  inline constexpr bool is_nothrow_tag_invocable_v =
-      noexcept(_tag_invoke::try_tag_invoke<CPO, Args...>(0));
+namespace _tag_invoke_cpo {
+inline constexpr _tag_invoke::_fn tag_invoke{};
+}
+using namespace _tag_invoke_cpo;
 
-  template <typename CPO, typename... Args>
-  using is_nothrow_tag_invocable =
-      std::bool_constant<is_nothrow_tag_invocable_v<CPO, Args...>>;
+template <typename T>
+using constexpr_value = _tag_invoke::_constexpr_value<T>;
 
-  template <typename CPO, typename... Args>
-  UNIFEX_CONCEPT tag_invocable =
-      (sizeof(_tag_invoke::try_tag_invoke<CPO, Args...>(0)) ==
-       sizeof(_tag_invoke::yes_type));
+template <auto& CPO>
+using tag_t = remove_cvref_t<decltype(CPO)>;
 
-  template <typename Fn>
-  using meta_tag_invoke_result =
-      meta_quote1_<tag_invoke_result_t>::bind_front<Fn>;
-} // namespace unifex
+// Manually implement the traits here rather than defining them in terms of
+// the corresponding std::invoke_result/is_invocable/is_nothrow_invocable
+// traits to improve compile-times. We don't need all of the generality of the
+// std:: traits and the tag_invoke traits are used heavily through libunifex
+// so optimising them for compile time makes a big difference.
+
+using _tag_invoke::tag_invoke_result_t;
+
+template <typename CPO, typename... Args>
+inline constexpr bool is_tag_invocable_v =
+    (sizeof(_tag_invoke::try_tag_invoke<CPO, Args...>(0)) ==
+     sizeof(_tag_invoke::yes_type));
+
+template <typename CPO, typename... Args>
+struct tag_invoke_result
+  : conditional_t<
+        is_tag_invocable_v<CPO, Args...>,
+        _tag_invoke::defer<tag_invoke_result_t, CPO, Args...>,
+        _tag_invoke::empty> {};
+
+template <typename CPO, typename... Args>
+using is_tag_invocable = std::bool_constant<is_tag_invocable_v<CPO, Args...>>;
+
+template <typename CPO, typename... Args>
+inline constexpr bool is_nothrow_tag_invocable_v =
+    noexcept(_tag_invoke::try_tag_invoke<CPO, Args...>(0));
+
+template <typename CPO, typename... Args>
+using is_nothrow_tag_invocable =
+    std::bool_constant<is_nothrow_tag_invocable_v<CPO, Args...>>;
+
+template <typename CPO, typename... Args>
+UNIFEX_CONCEPT tag_invocable =
+    (sizeof(_tag_invoke::try_tag_invoke<CPO, Args...>(0)) ==
+     sizeof(_tag_invoke::yes_type));
+
+template <typename CPO, typename Target, typename... As>
+inline constexpr auto tag_invoke_v = _tag_invoke::_v<CPO, Target, As...>;
+
+template <typename Fn>
+using meta_tag_invoke_result =
+    meta_quote1_<tag_invoke_result_t>::bind_front<Fn>;
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

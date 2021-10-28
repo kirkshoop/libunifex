@@ -46,22 +46,28 @@ enum class blocking_kind {
 
 namespace _blocking {
 inline const struct _fn {
-  template(typename Sender)
-    (requires tag_invocable<_fn, const Sender&>)
-  constexpr auto operator()(const Sender& s) const
+  template(typename Sender)                         //
+      (requires tag_invocable<_fn, const Sender&>)  //
+      constexpr auto
+      operator()(const Sender& s) const
       noexcept(is_nothrow_tag_invocable_v<_fn, const Sender&>)
-      -> tag_invoke_result_t<_fn, const Sender&> {
+          -> tag_invoke_result_t<_fn, const Sender&> {
     return tag_invoke(_fn{}, s);
   }
-  template(typename Sender)
-    (requires (!tag_invocable<_fn, const Sender&>))
-  constexpr blocking_kind operator()(const Sender&) const noexcept {
+  template(typename Sender)                           //
+      (requires(!tag_invocable<_fn, const Sender&>))  //
+      constexpr blocking_kind
+      operator()(const Sender&) const noexcept {
     return blocking_kind::maybe;
   }
 } blocking{};
-} // namespace _blocking
+}  // namespace _blocking
 using _blocking::blocking;
 
-} // namespace unifex
+template <typename Sender>
+inline constexpr blocking_kind blocking_v =
+    unifex::tag_invoke_v<_blocking::_fn, const Sender&>;
+
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

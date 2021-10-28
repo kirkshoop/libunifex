@@ -184,8 +184,9 @@ public:
   template <typename Receiver>
   using receiver_t = receiver_t<Receiver, Func>;
 
-  friend constexpr auto tag_invoke(tag_t<blocking>, const type& sender) {
-    return blocking(sender.pred_);
+  friend constexpr auto
+  tag_invoke(constexpr_value<tag_t<blocking>>, constexpr_value<const type&>) {
+    return blocking_v<Predecessor>;
   }
 
   template(typename Sender, typename Receiver)      //

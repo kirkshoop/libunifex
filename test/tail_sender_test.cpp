@@ -41,20 +41,25 @@ TEST(TailSender, Smoke) {
   EXPECT_TRUE(bool(
       same_as<decltype(as_tail_sender(null_tail_sender{})), null_tail_sender>));
   EXPECT_TRUE(
-      bool(same_as<decltype(as_tail_sender(just())), decltype(just())>));
+      bool(!same_as<decltype(as_tail_sender(just())), decltype(just())>));
   EXPECT_TRUE(
       bool(!same_as<decltype(as_tail_sender(just(42))), decltype(just(42))>));
-  EXPECT_TRUE(bool(same_as<
+  EXPECT_TRUE(bool(!same_as<
                    decltype(as_tail_sender(just() | then(fn))),
                    decltype(just() | then(fn))>));
 
-  // just() and then() work in tail_sender expressions
-  EXPECT_TRUE(tail_sender<decltype(just())>);
-  EXPECT_TRUE(bool(tail_sender<decltype(just() | then(fn))>));
-  EXPECT_TRUE(bool(tail_sender<decltype(just(42) | then(fn))>));
-
   // as_tail_sender() can adapt many senders to satisfy tail_sender
+  EXPECT_TRUE(tail_sender<decltype(as_tail_sender(just()))>);
+  EXPECT_TRUE(bool(tail_sender<decltype(as_tail_sender(just() | then(fn)))>));
+  EXPECT_TRUE(bool(tail_sender<decltype(as_tail_sender(just(42) | then(fn)))>));
   EXPECT_TRUE(tail_sender<decltype(as_tail_sender(just(42)))>);
+
+  resume_tail_sender(as_tail_sender(just() | then(fn)));
+
+  int resume_count = 0;
+  resume_tail_sender(
+      as_tail_sender(just() | then([&]() noexcept { ++resume_count; })));
+  EXPECT_EQ(resume_count, 1);
 }
 
 // Straight line - with conditional

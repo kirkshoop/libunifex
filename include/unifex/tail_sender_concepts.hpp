@@ -70,10 +70,12 @@ using next_tail_sender_to_t =
     next_tail_operation_t<unifex::connect_result_t<T, Receiver>>;
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(   //
-    _tail_sender_traits,   //
-    requires(T t)          //
-        (t.sends_done) &&  //
+UNIFEX_CONCEPT_FRAGMENT(                           //
+    _tail_sender_traits,                           //
+    requires(const T& t)                           //
+        (t.sends_done) &&                          //
+        (unifex::blocking_v<T> ==                  //
+         unifex::blocking_kind::always_inline) &&  //
         same_as<unifex::sender_single_value_return_type_t<T>, void>);
 
 template <typename T>
@@ -82,16 +84,11 @@ UNIFEX_CONCEPT _tail_sender =                   //
         /* unifex::is_sender_nofail_v<T> && */  // just() doesn't know it is
                                                 // nofail until a receiver is
                                                 // connected..
-        /*(unifex::blocking(*((T*)0)) == */     //
-        /* unifex::blocking_kind::always_inline) && */  // I don't know how to
-                                                        // make constexpr
-                                                        // transitive to members
-                                                        // - `just() | then()`
-        (std::is_nothrow_move_constructible_v<T>)&&     //
-        (std::is_nothrow_destructible_v<T>)&&           //
-        /* (std::is_trivially_destructible_v<T>)&& */   // variant_sender cannot
-                                                        // be trivially
-                                                        // destructible
+        (std::is_nothrow_move_constructible_v<T>)&&    //
+        (std::is_nothrow_destructible_v<T>)&&          //
+        /* (std::is_trivially_destructible_v<T>)&& */  // variant_sender cannot
+                                                       // be trivially
+                                                       // destructible
         UNIFEX_FRAGMENT(unifex::_tail_sender_traits, T));
 
 template <typename T>
@@ -138,6 +135,7 @@ UNIFEX_CONCEPT_FRAGMENT(                                             //
         (c.sends_done,                                               //
          unifex::connect(c, r)) &&                                   //
         (unifex::is_nothrow_connectable_v<T, Receiver>)&&            //
+        (_tail_operation<connect_result_t<T, Receiver>>)&&           //
         (tail_sender_or_void<next_tail_sender_to_t<T, Receiver>>)&&  //
         (same_as<                                                    //
             unifex::sender_single_value_return_type_t<T>,            //
@@ -192,8 +190,11 @@ struct tail_sender_base {
   using error_types = Variant<std::exception_ptr>;
   static inline constexpr bool sends_done = false;
 
-  friend constexpr blocking_kind
-  tag_invoke(tag_t<blocking>, const tail_sender_base&) noexcept {
+  template(typename T)                              //
+      (requires derived_from<T, tail_sender_base>)  //
+      friend constexpr blocking_kind tag_invoke(
+          constexpr_value<tag_t<blocking>>,
+          constexpr_value<const T&>) noexcept {
     return blocking_kind::always_inline;
   }
 };
@@ -579,21 +580,28 @@ struct _sender {
         typename _op<Sender, Receiver>::type connect(Receiver r) noexcept {
       return {s_, r};
     }
+    friend constexpr blocking_kind tag_invoke(
+        constexpr_value<tag_t<blocking>>,
+        constexpr_value<const type>) noexcept {
+      return blocking_v<Sender>;
+    }
   };
 };
 struct _fn {
-  template(typename TailSender)    //
-      (requires                    //
-       (tail_sender<TailSender>))  //
+  template(typename TailSender)                                     //
+      (requires                                                     //
+       (sender<TailSender>) &&                                      //
+       (blocking_v<TailSender> == blocking_kind::always_inline) &&  //
+       (tail_sender<TailSender>))                                   //
       TailSender
       operator()(TailSender&& s) const noexcept {
     return (TailSender &&) s;
   }
-  template(typename Sender)       //
-      (requires                   //
-       (!tail_sender<Sender>) &&  //
-       (sender<Sender>))  //&&                                              //
-      //    (blocking(s) == blocking_kind::always_inline(sender<Sender>)))  //
+  template(typename Sender)                                     //
+      (requires                                                 //
+       (sender<Sender>) &&                                      //
+       (blocking_v<Sender> == blocking_kind::always_inline) &&  //
+       (!tail_sender<Sender>))                                  //
       typename _sender<Sender>::type
       operator()(Sender s) const noexcept {
     return {{}, s};

@@ -282,6 +282,12 @@ struct _variant_tail_sender : tail_sender_base {
         });
   }
 
+  friend constexpr blocking_kind
+  tag_invoke(tag_t<blocking>, const _variant_tail_sender<Cs...>&) noexcept {
+    constexpr auto kind = (unifex::blocking(std::declval<const Cs&>()) && ...);
+    return kind;
+  }
+
 private:
   template <typename... OtherCs>
   friend struct _variant_tail_sender;
@@ -310,64 +316,6 @@ private:
   manual_lifetime_union<replace_void_with_null_tail_sender<Cs>...> state;
 };
 
-inline null_tail_sender resume_tail_senders_until_one_remaining() noexcept {
-  return {};
-}
-
-template(typename Receiver, typename C)  //
-    (requires                            //
-     _tail_sender<C>)                    //
-    C resume_tail_senders_until_one_remaining(Receiver, C c) noexcept {
-  return c;
-}
-
-template(typename... Cs, std::size_t... Is, typename Receiver)  //
-    (requires                                                   //
-     all_true<_tail_sender<Cs>...>)                             //
-    UNIFEX_ALWAYS_INLINE auto _resume_tail_senders_until_one_remaining(
-        std::index_sequence<Is...>, Receiver r, Cs... cs) noexcept {
-  std::size_t remaining = sizeof...(cs);
-  auto invoke_one = [&](auto& s) noexcept {
-    auto op = unifex::connect(s, r);
-    using one_result_type = variant_tail_sender<
-        unifex::null_tail_sender,
-        unifex::callable_result_t<unifex::tag_t<unifex::start>, decltype(op)&>>;
-    if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
-      if (!op) {
-        --remaining;
-        return one_result_type{unifex::null_tail_sender{}};
-      }
-    }
-    return one_result_type{unifex::start(op)};
-  };
-
-  using result_type =
-      variant_tail_sender<decltype(_invoke_sequential(invoke_one(cs), r))...>;
-  result_type result;
-
-  auto cs2_tuple = std::make_tuple(_invoke_sequential(invoke_one(cs), r)...);
-
-  while (true) {
-    remaining = sizeof...(cs);
-    ((remaining > 1
-          ? (void)(result = std::get<Is>(cs2_tuple) = _invoke_sequential(invoke_one(std::get<Is>(cs2_tuple)), r))
-          : (void)(result = std::get<Is>(cs2_tuple))),
-     ...);
-
-    if (remaining <= 1) {
-      return result;
-    }
-  }
-}
-
-template(typename Receiver, typename... Cs)        //
-    (requires                                      //
-     (all_true<tail_sender_to<Cs, Receiver>...>))  //
-    auto resume_tail_senders_until_one_remaining(
-        Receiver r, Cs... cs) noexcept {
-  return _resume_tail_senders_until_one_remaining(
-      std::index_sequence_for<Cs...>{}, r, cs...);
-}
 }  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>
