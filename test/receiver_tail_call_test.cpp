@@ -13,16 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <unifex/receiver_concepts.hpp>
-#include <unifex/scheduler_concepts.hpp>
-#include <unifex/timed_single_thread_context.hpp>
-#include <unifex/stop_when.hpp>
-#include <unifex/with_query_value.hpp>
-#include <unifex/sync_wait.hpp>
 #include <unifex/just.hpp>
-#include <unifex/then.hpp>
 #include <unifex/let_done.hpp>
+#include <unifex/receiver_concepts.hpp>
 #include <unifex/repeat_effect_until.hpp>
+#include <unifex/scheduler_concepts.hpp>
+#include <unifex/stop_when.hpp>
+#include <unifex/sync_wait.hpp>
+#include <unifex/then.hpp>
+#include <unifex/timed_single_thread_context.hpp>
+#include <unifex/with_query_value.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -37,13 +37,14 @@ TEST(ReceiverTailCall, Smoke) {
   unifex::timed_single_thread_context time;
   int iterations = 0;
   sync_wait(
-    just() 
-    | then([&iterations]{++iterations;})
-    | repeat_effect()
-    | unifex::stop_when(
-      unifex::schedule_after(2s))
-    | let_done([]{ return just(); })
-    | then([&iterations]{ std::cout << "result: there were " << iterations << " iterations in 2s\n"; })
-    | with_query_value(unifex::get_scheduler, time.get_scheduler())
-  );
+      just()                                           //
+      | then([&iterations] { ++iterations; })          //
+      | repeat_effect()                                //
+      | unifex::stop_when(unifex::schedule_after(2s))  //
+      | let_done([] { return just(); })                //
+      | then([&iterations] {
+          std::cout << "result: there were " << iterations
+                    << " iterations in 2s\n";
+        })  //
+      | with_query_value(unifex::get_scheduler, time.get_scheduler()));
 }

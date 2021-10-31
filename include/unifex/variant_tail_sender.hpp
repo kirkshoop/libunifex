@@ -19,6 +19,8 @@
 
 #include <unifex/detail/unifex_fwd.hpp>
 
+#include <unifex/manual_lifetime.hpp>
+#include <unifex/manual_lifetime_union.hpp>
 #include <unifex/tag_invoke.hpp>
 #include <unifex/tail_sender_concepts.hpp>
 #include <unifex/type_list.hpp>
@@ -87,7 +89,11 @@ struct _variant_tail_sender : tail_sender_base {
     o.visit([this, &o](const auto& v) {
       using v_t = remove_cvref_t<decltype(v)>;
       state.template construct<v_t>(v);
-      tag = o.tag;
+      if constexpr (same_as<null_tail_sender, v_t>) {  //
+        tag = o.tag;
+      } else {
+        tag = o.tag;
+      }
     });
   }
   _variant_tail_sender& operator=(const _variant_tail_sender& o) noexcept {
@@ -95,7 +101,11 @@ struct _variant_tail_sender : tail_sender_base {
     o.visit([this, &o](const auto& v) {
       using v_t = remove_cvref_t<decltype(v)>;
       state.template construct<v_t>(v);
-      tag = o.tag;
+      if constexpr (same_as<null_tail_sender, v_t>) {  //
+        tag = o.tag;
+      } else {
+        tag = o.tag;
+      }
     });
     return *this;
   }
@@ -105,7 +115,11 @@ struct _variant_tail_sender : tail_sender_base {
       using v_t = remove_cvref_t<decltype(v)>;
       state.template construct<v_t>(std::move(v));
       v.~v_t();
-      tag = std::exchange(o.tag, -1);
+      if constexpr (same_as<null_tail_sender, v_t>) {  //
+        tag = std::exchange(o.tag, -1);
+      } else {
+        tag = std::exchange(o.tag, -1);
+      }
     });
   }
   _variant_tail_sender& operator=(_variant_tail_sender&& o) noexcept {
@@ -114,7 +128,11 @@ struct _variant_tail_sender : tail_sender_base {
       using v_t = remove_cvref_t<decltype(v)>;
       state.template construct<v_t>(std::move(v));
       v.~v_t();
-      tag = std::exchange(o.tag, -1);
+      if constexpr (same_as<null_tail_sender, v_t>) {  //
+        tag = std::exchange(o.tag, -1);
+      } else {
+        tag = std::exchange(o.tag, -1);
+      }
     });
     return *this;
   }
@@ -140,7 +158,11 @@ struct _variant_tail_sender : tail_sender_base {
       void emplace(C c) noexcept {
     reset();
     state.template construct<C>(std::move(c));
-    tag = index_of_v<C, Cs...>;
+    if constexpr (same_as<null_tail_sender, std::decay_t<C>>) {  //
+      tag = index_of_v<C, Cs...>;
+    } else {
+      tag = index_of_v<C, Cs...>;
+    }
   }
 
   void reset() noexcept {
@@ -199,7 +221,10 @@ struct _variant_tail_sender : tail_sender_base {
     explicit operator bool() const noexcept {
       return visit([](const auto& op) {
         if constexpr (nothrow_contextually_convertible_to_bool<decltype(op)>) {
-          return !!op;
+          if (!op) {  //
+            return false;
+          }
+          return true;
         } else {
           return true;
         }
@@ -232,7 +257,6 @@ struct _variant_tail_sender : tail_sender_base {
       })};
     }
 
-  private:
     template <typename F>
     auto visit(F f) noexcept {
       return visit_impl(std::move(f), std::index_sequence_for<Operations...>{});
@@ -243,6 +267,7 @@ struct _variant_tail_sender : tail_sender_base {
       return visit_impl(std::move(f), std::index_sequence_for<Operations...>{});
     }
 
+  private:
     template <typename F, std::size_t Idx, std::size_t... Indices>
     auto visit_impl(F f, std::index_sequence<Idx, Indices...>) noexcept {
       using T = nth_type_t<Idx, Operations...>;
@@ -293,13 +318,35 @@ struct _variant_tail_sender : tail_sender_base {
     return blocking_kind::always_inline;
   }
 
-private:
-  template <typename... OtherCs>
-  friend struct _variant_tail_sender;
+  template <typename F>
+  auto visit(F f) noexcept {
+    return visit_impl(std::move(f), std::index_sequence_for<Cs...>{});
+  }
 
   template <typename F>
   auto visit(F f) const noexcept {
     return visit_impl(std::move(f), std::index_sequence_for<Cs...>{});
+  }
+
+private:
+  template <typename... OtherCs>
+  friend struct _variant_tail_sender;
+
+  template <typename F, std::size_t Idx, std::size_t... Indices>
+  auto visit_impl(F f, std::index_sequence<Idx, Indices...>) noexcept {
+    if (tag < 0 || tag > std::ptrdiff_t(sizeof...(Cs))) {
+      std::terminate();
+    }
+    using T = nth_type_t<Idx, replace_void_with_null_tail_sender<Cs>...>;
+    if constexpr (sizeof...(Indices) == 0) {
+      auto& s = state.template get<T>();
+      return f(s);
+    } else if (tag == Idx) {
+      auto& s = state.template get<T>();
+      return f(s);
+    } else {
+      return visit_impl(std::move(f), std::index_sequence<Indices...>{});
+    }
   }
 
   template <typename F, std::size_t Idx, std::size_t... Indices>
@@ -309,9 +356,11 @@ private:
     }
     using T = nth_type_t<Idx, replace_void_with_null_tail_sender<Cs>...>;
     if constexpr (sizeof...(Indices) == 0) {
-      return f(state.template get<T>());
+      const auto& s = state.template get<T>();
+      return f(s);
     } else if (tag == Idx) {
-      return f(state.template get<T>());
+      const auto& s = state.template get<T>();
+      return f(s);
     } else {
       return visit_impl(std::move(f), std::index_sequence<Indices...>{});
     }

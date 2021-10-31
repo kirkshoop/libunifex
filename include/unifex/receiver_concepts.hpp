@@ -16,8 +16,8 @@
 #pragma once
 
 #include <unifex/config.hpp>
+#include <unifex/basic_concepts.hpp>
 #include <unifex/tag_invoke.hpp>
-#include <unifex/tail_callable_concepts.hpp>
 #include <unifex/type_traits.hpp>
 #include <unifex/detail/unifex_fwd.hpp>
 
@@ -220,11 +220,13 @@ UNIFEX_CONCEPT_FRAGMENT(
      noexcept(set_error(std::move(r), (E &&) e))));
 
 template <typename R, typename E = std::exception_ptr>
-UNIFEX_CONCEPT  //
-    receiver =  //
-    move_constructible<remove_cvref_t<R>>&&
-        constructible_from<remove_cvref_t<R>, R>&&
-            UNIFEX_FRAGMENT(unifex::_receiver, R, E);
+UNIFEX_CONCEPT                                 //
+    receiver =                                 //
+    (move_constructible<remove_cvref_t<R>>)&&  //
+    (constructible_from<
+        remove_cvref_t<R>,
+        R>)&&  //
+    UNIFEX_FRAGMENT(unifex::_receiver, R, E);
 
 template <typename T, typename... An>
 UNIFEX_CONCEPT_FRAGMENT(                         //

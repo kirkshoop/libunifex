@@ -66,14 +66,15 @@ struct _op<Receiver, Values...>::type {
                 tag_t<unifex::set_value>,
                 Receiver,
                 Values...>;
-            if constexpr (!tail_sender<tail>) {
-              static_assert(!sender<tail>, "just: sender not yet supported");
-            } else {
+            if constexpr (tail_sender<tail>) {
               return result_or_null_tail_sender(
                   unifex::set_value,
                   (Receiver &&) receiver_,
                   (Values &&) values...);
+            } else {
+              static_assert(!sender<tail>, "just: sender not yet supported");
             }
+            return {};
           },
           std::move(values_))};
     }

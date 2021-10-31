@@ -285,83 +285,33 @@ using variant_tail_sender = typename concat_type_lists_unique_t<
 
 // This handles the potential for recursion
 struct _has_tail_sender_start_impl {
-  template(typename Receiver, typename T, typename... PrevTailSenders)    //
-      (requires                                                           //
-       (!std::is_void_v<T>) AND                                           //
-       (!same_as<null_tail_sender, T>) AND                                //
-       (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (!_tail_sender_to<T, Receiver>) AND                                //
-       (!instance_of_v<_variant_tail_sender, T>))                         //
+  template(typename Receiver, typename T, typename... PrevTailSenders)  //
+      (requires                                                         //
+       all_true<
+           (!instance_of_v<_variant_tail_sender, T>),
+           (!std::is_void_v<T>),
+           (!same_as<null_tail_sender, T>),
+           (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>),
+           (!_tail_sender_to<T, Receiver>)>)  //
       static inline constexpr bool _value() noexcept {
+    static_assert(_tail_receiver<Receiver>);
     return false;
-  }  // namespace unifex
-
-  template(typename Receiver, typename T, typename... PrevTailSenders)    //
-      (requires                                                           //
-       (!std::is_void_v<T>) AND                                           //
-       (!same_as<null_tail_sender, T>) AND                                //
-       (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (_tail_sender_to<T, Receiver>) AND                                 //
-       (!instance_of_v<_variant_tail_sender, T>))                         //
-      static inline constexpr bool _value() noexcept {
-    return _has_tail_sender_start_impl::_value<
-        Receiver,
-        next_tail_sender_to_t<T, Receiver>,
-        T,
-        PrevTailSenders...>();
   }
-
-  template(typename Receiver, typename T, typename... PrevTailSenders)    //
-      (requires                                                           //
-       (std::is_void_v<T>) AND                                            //
-       (!same_as<null_tail_sender, T>) AND                                //
-       (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (!_tail_sender_to<T, Receiver>) AND                                //
-       (!instance_of_v<_variant_tail_sender, T>))                         //
+    
+  template(typename Receiver, typename T, typename... PrevTailSenders)  //
+      (requires                                                         //
+       (!instance_of_v<_variant_tail_sender, T>) &&                     //
+       any_true<
+           (std::is_void_v<T>),
+           (same_as<null_tail_sender, T>),
+           (_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>),
+           (_tail_sender_to<T, Receiver>)>)  //
       static inline constexpr bool _value() noexcept {
+    static_assert(_tail_receiver<Receiver>);
     return true;
   }
 
-  template(typename Receiver, typename T, typename... PrevTailSenders)    //
-      (requires                                                           //
-       (!std::is_void_v<T>) AND                                           //
-       (same_as<null_tail_sender, remove_cvref_t<T>>) AND                 //
-       (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (_tail_sender_to<T, Receiver>) AND                                 //
-       (!instance_of_v<_variant_tail_sender, T>))                         //
-      static inline constexpr bool _value() noexcept {
-    return true;
-  }
-
-  template(
-      typename Receiver,
-      typename T,
-      typename... PrevTailSenders)                                       //
-      (requires                                                          //
-       (!std::is_void_v<T>) AND                                          //
-       (!same_as<null_tail_sender, T>) AND                               //
-       (_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (!_tail_sender_to<T, Receiver>) AND                               //
-       (!instance_of_v<_variant_tail_sender, T>))                        //
-      static inline constexpr bool _value() noexcept {
-    return true;
-  }
-
-  template(
-      typename Receiver,
-      typename T,
-      typename... PrevTailSenders)                                       //
-      (requires                                                          //
-       (!std::is_void_v<T>) AND                                          //
-       (!same_as<null_tail_sender, T>) AND                               //
-       (_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (_tail_sender_to<T, Receiver>) AND                                //
-       (!instance_of_v<_variant_tail_sender, T>))                        //
-      static inline constexpr bool _value() noexcept {
-    return true;
-  }
-
-  template <typename Receiver, typename... PrevTailSenders>
+    template <typename Receiver, typename... PrevTailSenders>
   struct _variant_value_proxy {
     template <typename... Cs>
     static inline constexpr bool variant_value(_variant_tail_sender<Cs...>*) {
@@ -376,17 +326,14 @@ struct _has_tail_sender_start_impl {
   template(
       typename Receiver,
       typename T,
-      typename... PrevTailSenders)                                        //
-      (requires                                                           //
-       (!std::is_void_v<T>) AND                                           //
-       (!same_as<null_tail_sender, T>) AND                                //
-       (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>) AND  //
-       (_tail_sender_to<T, Receiver>) AND                                 //
-       (instance_of_v<_variant_tail_sender, T>))                          //
+      typename... PrevTailSenders)                //
+      (requires                                   //
+       (instance_of_v<_variant_tail_sender, T>))  //
       static inline constexpr auto _value() noexcept
       -> decltype(_has_tail_sender_start_impl::
                       _variant_value_proxy<Receiver, PrevTailSenders...>::
                           variant_value(static_cast<T*>(nullptr))) {
+    static_assert(_tail_receiver<Receiver>);
     return _has_tail_sender_start_impl::
         _variant_value_proxy<Receiver, PrevTailSenders...>::variant_value(
             static_cast<T*>(nullptr));
@@ -502,6 +449,90 @@ private:
   bool valid_;
 };
 
+namespace _tail {
+template <typename TailFn, typename Receiver>
+struct _op {
+  struct type : tail_operation_state_base {
+    using op_t = callable_result_t<TailFn>;
+    op_t op_;
+    Receiver r_;
+    template <typename TailFn2, typename Receiver2>
+    type(TailFn2&& t, Receiver2 r)  //
+        noexcept(noexcept(op_t(t())) && noexcept(Receiver(r)))
+      : op_(t())
+      , r_(r)  //
+    {}
+    inline constexpr explicit operator bool() const noexcept {
+        if constexpr (nothrow_contextually_convertible_to_bool<op_t>) {
+            return !!op_;
+        } else {
+            return true;
+        }
+    }
+    template(typename... As)  //
+        (requires             //
+         sizeof...(As) == 0)  //
+        void unwind(As...) noexcept {
+      unifex::set_done(std::move(r_));
+      op_.unwind();
+    }
+    template(typename... As)  //
+        (requires             //
+         sizeof...(As) == 0)  //
+        auto start(As&&...) noexcept {
+      unifex::set_value(std::move(r_));
+      if constexpr (std::is_void_v<decltype(unifex::start(op_))>) {
+        unifex::start(op_);
+        return;
+      } else {
+        return unifex::start(op_);
+      }
+    }
+  };
+};
+template <typename TailFn>
+struct _sender {
+  struct type : tail_sender_base {
+    remove_cvref_t<TailFn> t_;
+
+    template(typename TailFn2)                                      //
+        (requires                                                   //
+         std::is_constructible_v<remove_cvref_t<TailFn>, TailFn2>)  //
+        type(TailFn2&& t)                                           //
+        noexcept(
+            std::is_nothrow_constructible_v<remove_cvref_t<TailFn>, TailFn2>)
+      : t_(t)  //
+    {}
+
+    template(typename Receiver)        //
+        (requires                      //
+         (tail_receiver<Receiver>) &&  //
+         (std::is_nothrow_constructible_v<
+             typename _op<TailFn, Receiver>::type,
+             TailFn,
+             Receiver>))  //
+        typename _op<TailFn, Receiver>::type connect(Receiver r) noexcept {
+      return {t_, r};
+    }
+  };
+};
+struct _fn {
+  template(typename TailFn)                                                 //
+      (requires                                                             //
+       (is_nothrow_callable_v<TailFn>) &&                                   //
+       (std::is_nothrow_constructible_v<remove_cvref_t<TailFn>, TailFn>)&&  //
+       (std::is_nothrow_constructible_v<
+           typename _sender<TailFn>::type,
+           TailFn>))  //
+      typename _sender<TailFn>::type
+      operator()(TailFn t) const noexcept {
+    return {t};
+  }
+};
+}  // namespace _tail
+
+inline constexpr auto tail = _tail::_fn{};
+
 namespace _as_tail {
 template <typename Sender, typename Receiver>
 struct _op {
@@ -560,8 +591,8 @@ struct _op<Sender, Receiver>::type : tail_operation_state_base {
   template(typename... As)  //
       (requires             //
        sizeof...(As) == 0)  //
-      void start(As&&...) noexcept {
-    unifex::start(op_);
+      auto start(As&&...) noexcept {
+    return unifex::start(op_);
   }
 };
 

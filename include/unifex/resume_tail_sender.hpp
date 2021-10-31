@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <optional>
 #include <type_traits>
 
 #include <unifex/detail/prologue.hpp>
@@ -57,7 +58,7 @@ template(typename C, typename Receiver)  //
      (!std::is_void_v<C>) &&             //
      (tail_receiver<Receiver>)&&         //
      (_tail_sender<C>))                  //
-    auto _invoke_until_nullable(C c, Receiver r) {
+    auto _start_until_nullable(C c, Receiver r) {
   if constexpr (nullable_tail_sender_to<C, Receiver>) {
     return c;
   } else if constexpr (_terminal_tail_sender_to<C, Receiver>) {
@@ -69,15 +70,18 @@ template(typename C, typename Receiver)  //
     return null_tail_sender{};
   } else {
     auto op = unifex::connect(std::move(c), r);
-    return _invoke_until_nullable(unifex::start(op), std::move(r));
+    return _start_until_nullable(unifex::start(op), std::move(r));
   }
 }
 
 template(typename C, typename Receiver, typename... Prev)  //
-    (requires(!std::is_void_v<C>))                         //
-    auto _invoke_sequential(C c, Receiver r, type_list<Prev...>) {
+    (requires                                              //
+     (!std::is_void_v<C>) &&                               //
+     (tail_receiver<Receiver>)&&                           //
+     (_tail_sender<C>))                                    //
+    auto _start_sequential(C c, Receiver r, type_list<Prev...>) {
   static_assert(
-      _tail_sender<C>, "_invoke_sequential: must be called with a tail_sender");
+      _tail_sender<C>, "_start_sequential: must be called with a tail_sender");
   if constexpr (_terminal_tail_sender_to<C, Receiver>) {
     if constexpr (nullable_tail_sender_to<C, Receiver>) {
       return c;
@@ -114,16 +118,16 @@ template(typename C, typename Receiver, typename... Prev)  //
             "entering an infinite loop");
         using result_type = variant_tail_sender<
             null_tail_sender,
-            decltype(_invoke_until_nullable(*next, std::move(r)))>;
+            decltype(_start_until_nullable(*next, std::move(r)))>;
         if (!next) {
           return result_type{null_tail_sender{}};
         }
-        return result_type{_invoke_until_nullable(*next, std::move(r))};
+        return result_type{_start_until_nullable(*next, std::move(r))};
       } else {
         using result_type = variant_tail_sender<
             null_tail_sender,
             next_t,
-            decltype(_invoke_sequential(*next, r, type_list<C, Prev...>{}))>;
+            decltype(_start_sequential(*next, r, type_list<C, Prev...>{}))>;
         if constexpr (nullable_tail_sender_to<C, Receiver>) {
           if (!next) {
             return result_type{null_tail_sender{}};
@@ -134,7 +138,7 @@ template(typename C, typename Receiver, typename... Prev)  //
           return result_type{*next};
         } else {
           return result_type{
-              _invoke_sequential(*next, std::move(r), type_list<C, Prev...>{})};
+              _start_sequential(*next, std::move(r), type_list<C, Prev...>{})};
         }
       }
     }
@@ -144,23 +148,23 @@ template(typename C, typename Receiver, typename... Prev)  //
 template(typename C, typename Receiver)  //
     (requires                            //
      (!std::is_void_v<C>) &&             //
-     (tail_receiver<Receiver>))          //
-    auto _invoke_sequential(C c, Receiver r) {
-  static_assert(
-      _tail_sender<C>, "_invoke_sequential: must be called with a tail_sender");
-  return _invoke_sequential(c, r, type_list<>{});
+     (tail_receiver<Receiver>)&&         //
+     (tail_sender<C>))                   //
+    auto _start_sequential(C c, Receiver r) {
+  return _start_sequential(c, r, type_list<>{});
 }
 
 template(typename C, typename Receiver = null_tail_receiver)  //
     (requires                                                 //
      (!std::is_void_v<C>) &&                                  //
+     (receiver<Receiver>)&&                                   //
      (tail_sender_to<C, Receiver>))                           //
     void resume_tail_sender(C c, Receiver r = Receiver{}) {
   static_assert(
-      nullable_tail_sender_to<decltype(_invoke_sequential(c, r)), Receiver>,
-      "resume_tail_sender: _invoke_sequential must return a "
+      nullable_tail_sender_to<decltype(_start_sequential(c, r)), Receiver>,
+      "resume_tail_sender: _start_sequential must return a "
       "nullable_tail_sender");
-  auto c2 = _invoke_sequential(c, r);
+  auto c2 = _start_sequential(c, r);
   for (;;) {
     auto op = unifex::connect(c2, r);
     if (!op) {
@@ -170,52 +174,98 @@ template(typename C, typename Receiver = null_tail_receiver)  //
       unifex::start(op);
       break;
     } else {
-      c2 = _invoke_sequential(unifex::start(op), r, type_list<>{});
+      c2 = _start_sequential(unifex::start(op), r, type_list<>{});
     }
   }
 }
 
-inline null_tail_sender resume_tail_senders_until_one_remaining() noexcept {
+template(typename Receiver)      //
+    (requires                    //
+     (tail_receiver<Receiver>))  //
+    inline null_tail_sender
+    resume_tail_senders_until_one_remaining(Receiver) noexcept {
   return {};
 }
 
 template(typename Receiver, typename C)  //
     (requires                            //
-     _tail_sender<C>)                    //
+     (tail_receiver<Receiver>) AND       //
+     (_tail_sender<C>))                  //
     C resume_tail_senders_until_one_remaining(Receiver, C c) noexcept {
   return c;
 }
 
 template(typename... Cs, std::size_t... Is, typename Receiver)  //
     (requires                                                   //
-     all_true<_tail_sender<Cs>...>)                             //
+     (tail_receiver<Receiver>) AND                              //
+     (all_true<_tail_sender<Cs>...>))                           //
     UNIFEX_ALWAYS_INLINE auto _resume_tail_senders_until_one_remaining(
         std::index_sequence<Is...>, Receiver r, Cs... cs) noexcept {
   std::size_t remaining = sizeof...(cs);
-  auto invoke_one = [&](auto& s) noexcept {
+  // start_one and result_or_null have to cooperate
+  // to ensure that the result is not overwritten by a
+  // a terminating tail_sender as this would terminate
+  // before completing the remaining tail_sender(s)
+  struct start_one_null_tail_sender : null_tail_sender {};
+  auto start_one = [&](auto& s) noexcept {
     auto op = unifex::connect(s, r);
-    using one_result_type = variant_tail_sender<
-        unifex::null_tail_sender,
-        unifex::callable_result_t<unifex::tag_t<unifex::start>, decltype(op)&>>;
-    if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
-      if (!op) {
+    using start_result_t =
+        unifex::callable_result_t<unifex::tag_t<unifex::start>, decltype(op)&>;
+    if constexpr (std::is_void_v<start_result_t>) {
+      if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
+        if (!op) {
+          --remaining;
+          return start_one_null_tail_sender{};
+        }
+      }
+      unifex::start(op);
+      --remaining;
+      return start_one_null_tail_sender{};
+    } else {
+      using one_result_type =
+          variant_tail_sender<start_result_t, start_one_null_tail_sender>;
+      if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
+        if (!op) {
+          --remaining;
+          return one_result_type{start_one_null_tail_sender{}};
+        }
+      }
+      if constexpr (same_as<null_tail_sender, start_result_t>) {
         --remaining;
-        return one_result_type{unifex::null_tail_sender{}};
+        unifex::start(op);
+        return one_result_type{start_one_null_tail_sender{}};
+      } else {
+        return one_result_type{unifex::start(op)};
       }
     }
-    return one_result_type{unifex::start(op)};
   };
 
   using result_type =
-      variant_tail_sender<decltype(_invoke_sequential(invoke_one(cs), r))...>;
+      variant_tail_sender<decltype(_start_sequential(start_one(cs), r))...>;
   result_type result;
 
-  auto cs2_tuple = std::make_tuple(_invoke_sequential(invoke_one(cs), r)...);
+  auto cs2_tuple = std::make_tuple(_start_sequential(start_one(cs), r)...);
+
+  auto result_or_null = [&](auto one) noexcept -> result_type {
+    if constexpr (same_as<decltype(one), start_one_null_tail_sender>) {
+      // result is unchanged
+      return result;
+    } else {
+      return one.visit([&](auto& s) noexcept -> result_type {
+        if constexpr (same_as<decltype(s), start_one_null_tail_sender>) {
+          // result is unchanged
+          return result;
+        } else {
+          return {s};
+        }
+      });
+    }
+  };
 
   while (true) {
     remaining = sizeof...(cs);
     ((remaining > 1
-          ? (void)(result = std::get<Is>(cs2_tuple) = _invoke_sequential(invoke_one(std::get<Is>(cs2_tuple)), r))
+          ? (void)(result = result_or_null(std::get<Is>(cs2_tuple) = _start_sequential(start_one(std::get<Is>(cs2_tuple)), r)))
           : (void)(result = std::get<Is>(cs2_tuple))),
      ...);
 
@@ -227,11 +277,20 @@ template(typename... Cs, std::size_t... Is, typename Receiver)  //
 
 template(typename Receiver, typename... Cs)        //
     (requires                                      //
+     (tail_receiver<Receiver>) AND                 //
      (all_true<tail_sender_to<Cs, Receiver>...>))  //
     auto resume_tail_senders_until_one_remaining(
         Receiver r, Cs... cs) noexcept {
   return _resume_tail_senders_until_one_remaining(
       std::index_sequence_for<Cs...>{}, r, cs...);
+}
+template(typename C0, typename... Cs)  //
+    (requires                          //
+     (tail_sender<C0>) AND             //
+     (all_true<tail_sender<Cs>...>))   //
+    auto resume_tail_senders_until_one_remaining(C0 c0, Cs... cs) noexcept {
+  return _resume_tail_senders_until_one_remaining(
+      std::index_sequence_for<C0, Cs...>{}, null_tail_receiver{}, c0, cs...);
 }
 }  // namespace unifex
 

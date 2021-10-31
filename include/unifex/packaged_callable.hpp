@@ -45,37 +45,46 @@ UNIFEX_CONCEPT callable_package =                //
 
 template <typename CPO, typename Target, typename... As>
 struct packaged_callable {
-  using value_type = unifex::callable_result_t<CPO, Target&, As&...>;
+  using value_type = unifex::callable_result_t<CPO, Target, As...>;
   CPO cpo_;
   Target t_;
   std::tuple<As...> as_;
   packaged_callable() = delete;
-  explicit packaged_callable(CPO cpo, Target t, As... as) noexcept(
-      (std::is_nothrow_move_constructible_v<CPO>)&&     //
-      (std::is_nothrow_move_constructible_v<Target>)&&  //
-      (std::is_nothrow_move_constructible_v<As>&&...))
+  explicit packaged_callable(CPO cpo, Target t, As... as)        //
+      noexcept((std::is_nothrow_move_constructible_v<CPO>)&&     //
+               (std::is_nothrow_move_constructible_v<Target>)&&  //
+               (std::is_nothrow_move_constructible_v<As>&&...))
     : cpo_(std::move(cpo))
     , t_(std::move(t))
     , as_(std::move(as)...) {}
-  explicit operator value_type() & noexcept(
-      is_nothrow_callable_v<CPO&, Target&, As&...>) {
-    return std::apply([&](auto&... as) { return cpo_(t_, as...); }, as_);
+  explicit operator value_type() &  //
+      noexcept(is_nothrow_callable_v<CPO, Target, As...>) {
+    return std::apply([&](auto... as) { return cpo_(t_, as...); }, as_);
   }
-  value_type
-  operator()() & noexcept(is_nothrow_callable_v<CPO&, Target&, As&...>) {
-    return std::apply([&](auto&... as) { return cpo_(t_, as...); }, as_);
+  value_type operator()() &  //
+      noexcept(is_nothrow_callable_v<CPO, Target, As...>) {
+    return std::apply([&](auto... as) { return cpo_(t_, as...); }, as_);
   }
 
-  explicit operator value_type() && noexcept(
-      is_nothrow_callable_v<CPO&, Target&&, As&&...>) {
+  explicit operator value_type() const&  //
+      noexcept(is_nothrow_callable_v<CPO, Target, As...>) {
+    return std::apply([&](auto... as) { return cpo_(t_, as...); }, as_);
+  }
+  value_type operator()() const&  //
+      noexcept(is_nothrow_callable_v<CPO, Target, As...>) {
+    return std::apply([&](auto... as) { return cpo_(t_, as...); }, as_);
+  }
+
+  explicit operator value_type() &&  //
+      noexcept(is_nothrow_callable_v<CPO, Target&&, As&&...>) {
     return std::apply(
         [cpo = std::move(cpo_), t = std::move(t_)](auto&&... as) mutable {
           return cpo(std::move(t), std::move(as)...);
         },
         std::move(as_));
   }
-  value_type
-  operator()() && noexcept(is_nothrow_callable_v<CPO&, Target&&, As&&...>) {
+  value_type operator()() &&  //
+      noexcept(is_nothrow_callable_v<CPO, Target&&, As&&...>) {
     return std::apply(
         [cpo = std::move(cpo_), t = std::move(t_)](auto&&... as) mutable {
           return cpo(std::move(t), std::move(as)...);
@@ -91,6 +100,9 @@ template(typename CPO, typename Target, typename... As)  //
      (std::is_nothrow_move_constructible_v<As> && ...))  //
     packaged_callable(CPO, Target, As...)
         ->packaged_callable<CPO, Target, As...>;
+
+template <typename CPO, typename Target, typename... As>  //
+using packaged_callable_t = packaged_callable<CPO, Target, As...>;
 
 }  // namespace unifex
 
