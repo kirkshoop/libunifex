@@ -165,6 +165,11 @@ struct _variant_tail_sender : tail_sender_base {
     }
   }
 
+  template <typename C>
+  bool contains() const noexcept {
+    return tag == index_of_v<C, Cs...>;
+  }
+
   void reset() noexcept {
     if (tag >= 0 && tag < std::ptrdiff_t(sizeof...(Cs))) {
       visit([this](auto& v) {
@@ -208,6 +213,11 @@ struct _variant_tail_sender : tail_sender_base {
           index_of_v<unifex::connect_result_t<Sender, Receiver>, Operations...>;
     }
 
+    template <typename C>
+    bool contains() const noexcept {
+      return tag == index_of_v<C, Cs...>;
+    }
+
     void reset() noexcept {
       if (tag >= 0 && tag < std::ptrdiff_t(sizeof...(Cs))) {
         visit([this](auto& v) {
@@ -241,7 +251,7 @@ struct _variant_tail_sender : tail_sender_base {
         decltype(unifex::start(std::declval<Operations&>()))...>;
     start_result_tail_sender start() noexcept {
       return {visit([](auto& op) -> start_result_tail_sender {
-        if constexpr (_nullable_tail_operation<decltype(op)>) {
+        if constexpr (nothrow_contextually_convertible_to_bool<decltype(op)>) {
           if (!op) {
             return {null_tail_sender{}};
           }

@@ -44,12 +44,8 @@ template(typename C, typename Receiver)  //
   if constexpr (nullable_tail_sender_to<C, Receiver>) {
     return c;
   } else {
-    // restrict scope of op
-    auto c2 = [&]() {
-      auto op = unifex::connect(std::move(c), r);
-      return unifex::start(op);
-    }();
-    return _resume_until_nullable(std::move(c2), std::move(r));
+    auto op = unifex::connect(std::move(c), r);
+    return _resume_until_nullable(unifex::start(op), std::move(r));
   }
 }
 
@@ -74,6 +70,27 @@ template(typename C, typename Receiver)  //
   }
 }
 
+template <typename Next, typename C, typename Receiver, typename... Prev>
+auto _start_next(Next next, Receiver r) {
+  if constexpr (one_of<Next, C, Prev...>) {
+    static_assert(
+        (nullable_tail_sender_to<C, Receiver> ||
+         (nullable_tail_sender_to<Prev, Receiver> || ...)),
+        "At least one tail_sender in a cycle must be nullable to avoid "
+        "entering an infinite loop");
+    return _start_until_nullable(next, std::move(r));
+  } else {
+    using result_type =
+        decltype(_start_sequential(next, r, type_list<C, Prev...>{}));
+    if constexpr (same_as<result_type, Next>) {
+      // Let the loop in resume_tail_sender() handle checking the boolean.
+      return next;
+    } else {
+      return _start_sequential(next, std::move(r), type_list<C, Prev...>{});
+    }
+  }
+}
+
 template(typename C, typename Receiver, typename... Prev)  //
     (requires                                              //
      (!std::is_void_v<C>) &&                               //
@@ -95,52 +112,32 @@ template(typename C, typename Receiver, typename... Prev)  //
     }
   } else {
     using next_t = next_tail_sender_to_t<C, Receiver>;
+    using result_type = decltype(_start_next<next_t, C, Receiver, Prev...>(
+        std::declval<next_t>(), r));
     if constexpr (std::is_void_v<next_t>) {
-      return null_tail_sender{};
-    } else {
-      using opt_t = std::optional<next_t>;
       // restrict scope of op
-      opt_t next = [&]() -> opt_t {
-        auto op = unifex::connect(std::move(c), r);
-        if constexpr (nullable_tail_sender_to<C, Receiver>) {
-          if (!op) {
-            return {std::nullopt};
-          }
-        }
-        return {unifex::start(op)};
-      }();
-
-      if constexpr (one_of<next_t, C, Prev...>) {
-        static_assert(
-            (nullable_tail_sender_to<C, Receiver> ||
-             (nullable_tail_sender_to<Prev, Receiver> || ...)),
-            "At least one tail_sender in a cycle must be nullable to avoid "
-            "entering an infinite loop");
-        using result_type = variant_tail_sender<
-            null_tail_sender,
-            decltype(_start_until_nullable(*next, std::move(r)))>;
-        if (!next) {
-          return result_type{null_tail_sender{}};
-        }
-        return result_type{_start_until_nullable(*next, std::move(r))};
-      } else {
-        using result_type = variant_tail_sender<
-            null_tail_sender,
-            next_t,
-            decltype(_start_sequential(*next, r, type_list<C, Prev...>{}))>;
-        if constexpr (nullable_tail_sender_to<C, Receiver>) {
-          if (!next) {
-            return result_type{null_tail_sender{}};
-          }
-        }
-        if constexpr (same_as<result_type, next_t>) {
-          // Let the loop in resume_tail_sender() handle checking the boolean.
-          return result_type{*next};
-        } else {
-          return result_type{
-              _start_sequential(*next, std::move(r), type_list<C, Prev...>{})};
-        }
+      {
+        auto op = unifex::connect(std::move(c), std::move(r));
+        unifex::start(op);
       }
+      return null_tail_sender{};
+    } else if constexpr (same_as<result_type, next_t>) {
+      auto op = unifex::connect(std::move(c), std::move(r));
+      return unifex::start(op);
+    } else if constexpr (nullable_tail_sender_to<C, Receiver>) {
+      auto op = unifex::connect(std::move(c), r);
+      using result_type = variant_tail_sender<
+          null_tail_sender,
+          decltype(_start_next<next_t, C, Receiver, Prev...>(
+              unifex::start(op), r))>;
+      if (!op) {
+        return result_type{null_tail_sender{}};
+      }
+      return result_type{
+          _start_next<next_t, C, Receiver, Prev...>(unifex::start(op), r)};
+    } else {
+      auto op = unifex::connect(std::move(c), r);
+      return _start_next<next_t, C, Receiver, Prev...>(unifex::start(op), r);
     }
   }
 }
@@ -179,6 +176,61 @@ template(typename C, typename Receiver = null_tail_receiver)  //
   }
 }
 
+// start_one and result_or_null have to cooperate
+// to ensure that the result is not overwritten by a
+// a terminating tail_sender as this would terminate
+// before completing the remaining tail_sender(s)
+struct _start_one_null_tail_sender : null_tail_sender {};
+template <typename TailSender, typename Receiver>
+auto _start_one(TailSender s, Receiver r, size_t& remaining) noexcept {
+  using start_result_t = next_tail_sender_to_t<TailSender, Receiver>;
+  auto op = unifex::connect(s, r);
+  if constexpr (std::is_void_v<start_result_t>) {
+    if constexpr (nullable_tail_sender_to<TailSender, Receiver>) {
+      if (!!op) {
+        unifex::start(op);
+      }
+    } else {
+      unifex::start(op);
+    }
+    --remaining;
+    return _start_one_null_tail_sender{};
+  } else if constexpr (same_as<null_tail_sender, start_result_t>) {
+    --remaining;
+    unifex::start(op);
+    return _start_one_null_tail_sender{};
+  } else {
+    using one_result_type =
+        variant_tail_sender<start_result_t, _start_one_null_tail_sender>;
+    if constexpr (nullable_tail_sender_to<TailSender, Receiver>) {
+      if (!op) {
+        --remaining;
+        return one_result_type{_start_one_null_tail_sender{}};
+      }
+    }
+    if constexpr (instance_of_v<_variant_tail_sender, start_result_t>) {
+      auto r = unifex::start(op);
+      if (r.template contains<null_tail_sender>()) {
+        --remaining;
+        return one_result_type{_start_one_null_tail_sender{}};
+      }
+      return one_result_type{r};
+    } else {
+      return one_result_type{unifex::start(op)};
+    }
+  }
+};
+
+template <typename Result, typename One>
+auto _resolve_result(Result& result, One one) noexcept {
+  if constexpr (!same_as<One, _start_one_null_tail_sender>) {
+    if (!one.template contains<_start_one_null_tail_sender>()) {
+      // update the result with a new valid tail_sender
+      result = one;
+    }
+  }
+};
+
 template(typename Receiver)      //
     (requires                    //
      (tail_receiver<Receiver>))  //
@@ -202,70 +254,22 @@ template(typename... Cs, std::size_t... Is, typename Receiver)  //
     UNIFEX_ALWAYS_INLINE auto _resume_tail_senders_until_one_remaining(
         std::index_sequence<Is...>, Receiver r, Cs... cs) noexcept {
   std::size_t remaining = sizeof...(cs);
-  // start_one and result_or_null have to cooperate
-  // to ensure that the result is not overwritten by a
-  // a terminating tail_sender as this would terminate
-  // before completing the remaining tail_sender(s)
-  struct start_one_null_tail_sender : null_tail_sender {};
-  auto start_one = [&](auto& s) noexcept {
-    auto op = unifex::connect(s, r);
-    using start_result_t =
-        unifex::callable_result_t<unifex::tag_t<unifex::start>, decltype(op)&>;
-    if constexpr (std::is_void_v<start_result_t>) {
-      if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
-        if (!op) {
-          --remaining;
-          return start_one_null_tail_sender{};
-        }
-      }
-      unifex::start(op);
-      --remaining;
-      return start_one_null_tail_sender{};
-    } else {
-      using one_result_type =
-          variant_tail_sender<start_result_t, start_one_null_tail_sender>;
-      if constexpr (nullable_tail_sender_to<decltype(s), Receiver>) {
-        if (!op) {
-          --remaining;
-          return one_result_type{start_one_null_tail_sender{}};
-        }
-      }
-      if constexpr (same_as<null_tail_sender, start_result_t>) {
-        --remaining;
-        unifex::start(op);
-        return one_result_type{start_one_null_tail_sender{}};
-      } else {
-        return one_result_type{unifex::start(op)};
-      }
-    }
-  };
 
-  using result_type =
-      variant_tail_sender<decltype(_start_sequential(start_one(cs), r))...>;
+  using result_type = variant_tail_sender<decltype(_start_sequential(
+      _start_one(cs, r, remaining), r))...>;
   result_type result;
 
-  auto cs2_tuple = std::make_tuple(_start_sequential(start_one(cs), r)...);
-
-  auto result_or_null = [&](auto one) noexcept -> result_type {
-    if constexpr (same_as<decltype(one), start_one_null_tail_sender>) {
-      // result is unchanged
-      return result;
-    } else {
-      return one.visit([&](auto& s) noexcept -> result_type {
-        if constexpr (same_as<decltype(s), start_one_null_tail_sender>) {
-          // result is unchanged
-          return result;
-        } else {
-          return {s};
-        }
-      });
-    }
-  };
+  auto cs2_tuple =
+      std::make_tuple(_start_sequential(_start_one(cs, r, remaining), r)...);
 
   while (true) {
     remaining = sizeof...(cs);
     ((remaining > 1
-          ? (void)(result = result_or_null(std::get<Is>(cs2_tuple) = _start_sequential(start_one(std::get<Is>(cs2_tuple)), r)))
+          ? (void)(_resolve_result(
+                result,
+                std::get<Is>(cs2_tuple)  //
+                = _start_sequential(
+                    _start_one(std::get<Is>(cs2_tuple), r, remaining), r)))
           : (void)(result = std::get<Is>(cs2_tuple))),
      ...);
 
