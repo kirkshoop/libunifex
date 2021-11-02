@@ -34,36 +34,6 @@
 
 namespace unifex {
 
-struct _first_defaultable_tail_sender {
-  template <typename C, typename... Rest>
-  struct _type_next;
-
-  template(typename C, typename... Rest)                //
-      (requires                                         //
-       (std::is_nothrow_default_constructible_v<C>) &&  //
-       (all_true<_tail_sender<Rest>...>))               //
-      static inline constexpr C _type();
-
-  template(typename Receiver, typename C, typename... Rest)  //
-      (requires                                              //
-       (!std::is_nothrow_default_constructible_v<C>) &&      //
-       (all_true<_tail_sender<Rest>...>))                    //
-      static inline constexpr auto _type() ->
-      typename _type_next<C, Rest...>::type;
-
-  template <typename C, typename... Rest>
-  struct _type_next {
-    using type = decltype(_type<Rest...>());
-  };
-
-  template <typename... Cs>
-  using type = decltype(_type<Cs...>());
-};
-
-template <typename... Cs>
-using first_defaultable_tail_sender_t =
-    typename _first_defaultable_tail_sender::type<Cs...>;
-
 template <typename... Cs>
 struct _variant_tail_sender : tail_sender_base {
   static_assert(sizeof...(Cs) >= 2);
@@ -72,7 +42,9 @@ struct _variant_tail_sender : tail_sender_base {
   static_assert(
       all_true<(unifex::blocking_v<Cs> == blocking_kind::always_inline)...>);
 
-  _variant_tail_sender() noexcept : tag(-1) {}
+  _variant_tail_sender() noexcept : tag(invalid_) {
+    state.template construct<invalid>();
+  }
 
   template(typename C)                                          //
       (requires                                                 //
@@ -121,12 +93,18 @@ struct _variant_tail_sender : tail_sender_base {
     return tag == index_of_v<C, Cs...>;
   }
 
+  template <typename C>
+  C& get() noexcept {
+    return state.template get<C>();
+  }
+
   void reset() noexcept {
     if (tag >= 0 && tag < std::ptrdiff_t(sizeof...(Cs))) {
       visit([this](auto& v) {
         using v_t = remove_cvref_t<decltype(v)>;
         state.template destruct<v_t>();
-        tag = -1;
+        tag = invalid_;
+        state.template construct<invalid>();
       });
     }
   }
@@ -135,7 +113,7 @@ struct _variant_tail_sender : tail_sender_base {
   struct op : tail_operation_state_base {
     static_assert(sizeof...(Operations) >= 2);
 
-    op() : tag(-1) {}
+    op() : tag(invalid_) { state.template construct<invalid>(); }
 
     template(typename Sender, typename Receiver)  //
         (requires                                 //
@@ -168,12 +146,18 @@ struct _variant_tail_sender : tail_sender_base {
       return tag == index_of_v<C, Cs...>;
     }
 
+    template <typename C>
+    C& get() noexcept {
+      return state.template get<C>();
+    }
+
     void reset() noexcept {
       if (tag >= 0 && tag < std::ptrdiff_t(sizeof...(Cs))) {
         visit([this](auto& v) {
           using v_t = remove_cvref_t<decltype(v)>;
           state.template destruct<v_t>();
-          tag = -1;
+          tag = invalid_;
+          state.template construct<invalid>();
         });
       }
     }
@@ -256,8 +240,10 @@ struct _variant_tail_sender : tail_sender_base {
       }
     }
 
+    struct invalid {};
+    static inline constexpr std::ptrdiff_t invalid_ = sizeof...(Operations);
     std::ptrdiff_t tag;
-    manual_lifetime_union<Operations...> state;
+    manual_lifetime_union<Operations..., invalid> state;
   };
 
   template(typename Receiver)      //
@@ -326,8 +312,11 @@ private:
     }
   }
 
+  struct invalid {};
+  static inline constexpr std::ptrdiff_t invalid_ = sizeof...(Cs);
   std::ptrdiff_t tag;
-  manual_lifetime_union<replace_void_with_null_tail_sender<Cs>...> state;
+  manual_lifetime_union<replace_void_with_null_tail_sender<Cs>..., invalid>
+      state;
 };
 
 }  // namespace unifex
