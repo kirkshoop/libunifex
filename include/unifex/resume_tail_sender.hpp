@@ -200,8 +200,11 @@ auto _start_one(TailSender s, Receiver r, size_t& remaining) noexcept {
     unifex::start(op);
     return _start_one_null_tail_sender{};
   } else {
-    using one_result_type =
-        variant_tail_sender<start_result_t, _start_one_null_tail_sender>;
+    // explicitly add null_tail_sender for _replace_termination_marker()
+    using one_result_type = variant_tail_sender<
+        start_result_t,
+        _start_one_null_tail_sender,
+        null_tail_sender>;
     if constexpr (nullable_tail_sender_to<TailSender, Receiver>) {
       if (!op) {
         --remaining;
@@ -221,12 +224,26 @@ auto _start_one(TailSender s, Receiver r, size_t& remaining) noexcept {
   }
 };
 
+template <typename One>
+auto _replace_termination_marker(One one) noexcept {
+  if constexpr (!same_as<One, _start_one_null_tail_sender>) {
+    if (!one.template contains<_start_one_null_tail_sender>()) {
+      // update the result with a new valid tail_sender
+      return one;
+    } else {
+      return One{null_tail_sender{}};
+    }
+  } else {
+    return null_tail_sender{};
+  }
+}
+
 template <typename Result, typename One>
 auto _resolve_result(Result& result, One one) noexcept {
   if constexpr (!same_as<One, _start_one_null_tail_sender>) {
     if (!one.template contains<_start_one_null_tail_sender>()) {
       // update the result with a new valid tail_sender
-      result = one;
+      result = _replace_termination_marker(one);
     }
   }
 };
@@ -255,8 +272,8 @@ template(typename... Cs, std::size_t... Is, typename Receiver)  //
         std::index_sequence<Is...>, Receiver r, Cs... cs) noexcept {
   std::size_t remaining = sizeof...(cs);
 
-  using result_type = variant_tail_sender<decltype(_start_sequential(
-      _start_one(cs, r, remaining), r))...>;
+  using result_type = variant_tail_sender<decltype(_replace_termination_marker(
+      _start_sequential(_start_one(cs, r, remaining), r)))...>;
   result_type result;
 
   auto cs2_tuple =
@@ -270,7 +287,7 @@ template(typename... Cs, std::size_t... Is, typename Receiver)  //
                 std::get<Is>(cs2_tuple)  //
                 = _start_sequential(
                     _start_one(std::get<Is>(cs2_tuple), r, remaining), r)))
-          : (void)(result = std::get<Is>(cs2_tuple))),
+          : (void)(result = _replace_termination_marker(std::get<Is>(cs2_tuple)))),
      ...);
 
     if (remaining <= 1) {

@@ -52,17 +52,15 @@ UNIFEX_CONCEPT_FRAGMENT(                                        //
         unifex::is_nothrow_callable_v<unifex::tag_t<unifex::start>, T&>);
 
 template <typename T>
-UNIFEX_CONCEPT _tail_operation =                      //
-    (                                                 //
-        (!std::is_copy_constructible_v<T>)&&          //
-        (!std::is_move_constructible_v<T>)&&          //
-        (!std::is_copy_assignable_v<T>)&&             //
-        (!std::is_move_assignable_v<T>)&&             //
-        (std::is_nothrow_destructible_v<T>)&&         //
-        /*(std::is_trivially_destructible_v<T>)&& */  // variant operation
-                                                      // cannot be trivially
-                                                      // destructible
-        UNIFEX_FRAGMENT(_tail_operation_impl, T)      //
+UNIFEX_CONCEPT _tail_operation =                  //
+    (                                             //
+        (!std::is_copy_constructible_v<T>)&&      //
+        (!std::is_move_constructible_v<T>)&&      //
+        (!std::is_copy_assignable_v<T>)&&         //
+        (!std::is_move_assignable_v<T>)&&         //
+        (std::is_nothrow_destructible_v<T>)&&     //
+        (std::is_trivially_destructible_v<T>)&&   //
+        UNIFEX_FRAGMENT(_tail_operation_impl, T)  //
     );
 
 template <typename T, typename Receiver>
@@ -84,11 +82,9 @@ UNIFEX_CONCEPT _tail_sender =                   //
         /* unifex::is_sender_nofail_v<T> && */  // just() doesn't know it is
                                                 // nofail until a receiver is
                                                 // connected..
-        (std::is_nothrow_move_constructible_v<T>)&&    //
-        (std::is_nothrow_destructible_v<T>)&&          //
-        /* (std::is_trivially_destructible_v<T>)&& */  // variant_sender cannot
-                                                       // be trivially
-                                                       // destructible
+        (std::is_nothrow_move_constructible_v<T>)&&  //
+        (std::is_nothrow_destructible_v<T>)&&        //
+        (std::is_trivially_destructible_v<T>)&&      //
         UNIFEX_FRAGMENT(unifex::_tail_sender_traits, T));
 
 template <typename T>
@@ -297,7 +293,7 @@ struct _has_tail_sender_start_impl {
     static_assert(_tail_receiver<Receiver>);
     return false;
   }
-    
+
   template(typename Receiver, typename T, typename... PrevTailSenders)  //
       (requires                                                         //
        (!instance_of_v<_variant_tail_sender, T>) &&                     //
@@ -311,7 +307,7 @@ struct _has_tail_sender_start_impl {
     return true;
   }
 
-    template <typename Receiver, typename... PrevTailSenders>
+  template <typename Receiver, typename... PrevTailSenders>
   struct _variant_value_proxy {
     template <typename... Cs>
     static inline constexpr bool variant_value(_variant_tail_sender<Cs...>*) {
@@ -463,22 +459,22 @@ struct _op {
       , r_(r)  //
     {}
     inline constexpr explicit operator bool() const noexcept {
-        if constexpr (nothrow_contextually_convertible_to_bool<op_t>) {
-            return !!op_;
-        } else {
-            return true;
-        }
+      if constexpr (nothrow_contextually_convertible_to_bool<op_t>) {
+        return !!op_;
+      } else {
+        return true;
+      }
     }
-    template(typename... As)  //
-        (requires             //
-         sizeof...(As) == 0)  //
+    template(typename... As)    //
+        (requires               //
+         (sizeof...(As) == 0))  //
         void unwind(As...) noexcept {
       unifex::set_done(std::move(r_));
       op_.unwind();
     }
-    template(typename... As)  //
-        (requires             //
-         sizeof...(As) == 0)  //
+    template(typename... As)    //
+        (requires               //
+         (sizeof...(As) == 0))  //
         auto start(As&&...) noexcept {
       unifex::set_value(std::move(r_));
       if constexpr (std::is_void_v<decltype(unifex::start(op_))>) {
@@ -559,9 +555,9 @@ struct _rcvr {
           "call set_error() at all");
       return unifex::set_error(std::move(*r_), (E &&) e);
     }
-    template(typename... As)  //
-        (requires             //
-         sizeof...(As) == 0)  //
+    template(typename... As)    //
+        (requires               //
+         (sizeof...(As) == 0))  //
         auto set_done(As&&...) noexcept {
       return unifex::set_done(std::move(*r_));
     }
@@ -578,9 +574,9 @@ struct _op<Sender, Receiver>::type : tail_operation_state_base {
     , op_(unifex::connect(s, rec_t{&r_})) {}
   Receiver r_;
   op_t op_;
-  template(typename... As)  //
-      (requires             //
-       sizeof...(As) == 0)  //
+  template(typename... As)    //
+      (requires               //
+       (sizeof...(As) == 0))  //
       void unwind(As...) noexcept {
     if constexpr (tail_operation<op_t>) {
       op_.unwind();
@@ -588,9 +584,9 @@ struct _op<Sender, Receiver>::type : tail_operation_state_base {
       unifex::set_done(std::move(r_));
     }
   }
-  template(typename... As)  //
-      (requires             //
-       sizeof...(As) == 0)  //
+  template(typename... As)    //
+      (requires               //
+       (sizeof...(As) == 0))  //
       auto start(As&&...) noexcept {
     return unifex::start(op_);
   }

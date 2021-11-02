@@ -33,18 +33,48 @@ using namespace unifex;
 using namespace std::chrono;
 using namespace std::chrono_literals;
 
+auto loopDuration = 2s;
+
 TEST(ReceiverTailCall, Smoke) {
   unifex::timed_single_thread_context time;
-  int iterations = 0;
+  std::int64_t iterations = 0;
   sync_wait(
-      just()                                           //
-      | then([&iterations] { ++iterations; })          //
-      | repeat_effect()                                //
-      | unifex::stop_when(unifex::schedule_after(2s))  //
-      | let_done([] { return just(); })                //
-      | then([&iterations] {
-          std::cout << "result: there were " << iterations
-                    << " iterations in 2s\n";
-        })  //
+      just()                                                     //
+      | then([&iterations] { ++iterations; })                    //
+      | repeat_effect()                                          //
+      | unifex::stop_when(unifex::schedule_after(loopDuration))  //
+      | let_done([] { return just(); })                          //
+      |
+      then([&iterations] {
+        std::cout << "result: there were " << iterations << " iterations in "
+                  << loopDuration.count() << "s which is "
+                  << (double(
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              loopDuration)
+                              .count()) /
+                      iterations)
+                  << " ns-per-iteration\n";
+      })  //
       | with_query_value(unifex::get_scheduler, time.get_scheduler()));
+}
+
+TEST(ReceiverTailCall, ForLoop) {
+  unifex::timed_single_thread_context time;
+  std::int64_t iterations = 0;
+  std::atomic_flag stop_requested{false};
+  auto op = connect(
+      schedule_after(time.get_scheduler(), loopDuration) |
+          then([&stop_requested] { stop_requested.test_and_set(); }),
+      null_tail_receiver{});
+  start(op);
+  for (; !stop_requested.test();) {
+    ++iterations;
+  }
+  std::cout << "result: there were " << iterations << " iterations in "
+            << loopDuration.count() << "s which is "
+            << (double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           loopDuration)
+                           .count()) /
+                iterations)
+            << " ns-per-iteration\n";
 }

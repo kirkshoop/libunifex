@@ -103,7 +103,7 @@ struct decay_copy_fn {
   }
 };
 
-template(typename T)(requires !pass_by_value<remove_cvref_t<T>>)
+template(typename T)(requires(!pass_by_value<remove_cvref_t<T>>))
     decay_copy_fn(T&&)
         ->decay_copy_fn<T&&>;
 
@@ -124,7 +124,7 @@ static_assert(index_of_v<int, char, bool, int, void, void*> == 2);
 
 struct _types_are_unique {
   template(typename... Ts)(
-      requires sizeof...(Ts) == 0) static inline constexpr bool _value() {
+      requires(sizeof...(Ts) == 0)) static inline constexpr bool _value() {
     return true;
   }
 

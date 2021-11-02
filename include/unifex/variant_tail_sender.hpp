@@ -72,8 +72,6 @@ struct _variant_tail_sender : tail_sender_base {
   static_assert(
       all_true<(unifex::blocking_v<Cs> == blocking_kind::always_inline)...>);
 
-  ~_variant_tail_sender() noexcept { reset(); }
-
   _variant_tail_sender() noexcept : tag(-1) {}
 
   template(typename C)                                          //
@@ -85,57 +83,10 @@ struct _variant_tail_sender : tail_sender_base {
     emplace(std::move(c));
   }
 
-  _variant_tail_sender(const _variant_tail_sender& o) noexcept {
-    o.visit([this, &o](const auto& v) {
-      using v_t = remove_cvref_t<decltype(v)>;
-      state.template construct<v_t>(v);
-      if constexpr (same_as<null_tail_sender, v_t>) {  //
-        tag = o.tag;
-      } else {
-        tag = o.tag;
-      }
-    });
-  }
-  _variant_tail_sender& operator=(const _variant_tail_sender& o) noexcept {
-    reset();
-    o.visit([this, &o](const auto& v) {
-      using v_t = remove_cvref_t<decltype(v)>;
-      state.template construct<v_t>(v);
-      if constexpr (same_as<null_tail_sender, v_t>) {  //
-        tag = o.tag;
-      } else {
-        tag = o.tag;
-      }
-    });
-    return *this;
-  }
-
-  _variant_tail_sender(_variant_tail_sender&& o) noexcept {
-    o.visit([this, &o](auto&& v) {
-      using v_t = remove_cvref_t<decltype(v)>;
-      state.template construct<v_t>(std::move(v));
-      v.~v_t();
-      if constexpr (same_as<null_tail_sender, v_t>) {  //
-        tag = std::exchange(o.tag, -1);
-      } else {
-        tag = std::exchange(o.tag, -1);
-      }
-    });
-  }
-  _variant_tail_sender& operator=(_variant_tail_sender&& o) noexcept {
-    reset();
-    o.visit([this, &o](auto&& v) {
-      using v_t = remove_cvref_t<decltype(v)>;
-      state.template construct<v_t>(std::move(v));
-      v.~v_t();
-      if constexpr (same_as<null_tail_sender, v_t>) {  //
-        tag = std::exchange(o.tag, -1);
-      } else {
-        tag = std::exchange(o.tag, -1);
-      }
-    });
-    return *this;
-  }
+  _variant_tail_sender(const _variant_tail_sender& o) = default;
+  _variant_tail_sender& operator=(const _variant_tail_sender& o) = default;
+  _variant_tail_sender(_variant_tail_sender&& o) = default;
+  _variant_tail_sender& operator=(_variant_tail_sender&& o) = default;
 
   template(typename... OtherCs)  //
       (requires                  //
@@ -184,7 +135,6 @@ struct _variant_tail_sender : tail_sender_base {
   struct op : tail_operation_state_base {
     static_assert(sizeof...(Operations) >= 2);
 
-    ~op() noexcept { reset(); }
     op() : tag(-1) {}
 
     template(typename Sender, typename Receiver)  //
