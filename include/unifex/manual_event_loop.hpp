@@ -18,6 +18,7 @@
 #include <unifex/blocking.hpp>
 #include <unifex/get_stop_token.hpp>
 #include <unifex/receiver_concepts.hpp>
+#include <unifex/resume_tail_sender.hpp>
 #include <unifex/stop_token_concepts.hpp>
 
 #include <condition_variable>
@@ -33,13 +34,9 @@ class context;
 struct task_base {
   using execute_fn = void(task_base*) noexcept;
 
-  explicit task_base(execute_fn* execute) noexcept
-  : execute_(execute)
-  {}
+  explicit task_base(execute_fn* execute) noexcept : execute_(execute) {}
 
-  void execute() noexcept {
-    this->execute_(this);
-  }
+  void execute() noexcept { this->execute_(this); }
 
   task_base* next_ = nullptr;
   execute_fn* execute_;
@@ -56,7 +53,7 @@ template <typename Receiver>
 class _op<Receiver>::type final : task_base {
   using stop_token_type = stop_token_type_t<Receiver&>;
 
- public:
+public:
   template <typename Receiver2>
   explicit type(Receiver2&& receiver, context* loop)
     : task_base(&type::execute_impl)
@@ -65,16 +62,19 @@ class _op<Receiver>::type final : task_base {
 
   void start() noexcept;
 
- private:
+private:
   static void execute_impl(task_base* t) noexcept {
     auto& self = *static_cast<type*>(t);
     if constexpr (is_stop_never_possible_v<stop_token_type>) {
-      unifex::set_value(std::move(self.receiver_));
+      resume_tail_sender(result_or_null_tail_sender(
+          unifex::set_value, std::move(self.receiver_)));
     } else {
       if (get_stop_token(self.receiver_).stop_requested()) {
-        unifex::set_done(std::move(self.receiver_));
+        resume_tail_sender(result_or_null_tail_sender(
+            unifex::set_done, std::move(self.receiver_)));
       } else {
-        unifex::set_value(std::move(self.receiver_));
+        resume_tail_sender(result_or_null_tail_sender(
+            unifex::set_value, std::move(self.receiver_)));
       }
     }
   }
@@ -86,19 +86,21 @@ class _op<Receiver>::type final : task_base {
 class context {
   template <class Receiver>
   friend struct _op;
- public:
+
+public:
   class scheduler {
     class schedule_task {
-      friend constexpr blocking_kind tag_invoke(
-          tag_t<blocking>,
-          const schedule_task&) noexcept {
+      friend constexpr blocking_kind
+      tag_invoke(tag_t<blocking>, const schedule_task&) noexcept {
         return blocking_kind::never;
       }
 
-     public:
+    public:
       template <
-          template <typename...> class Variant,
-          template <typename...> class Tuple>
+          template <typename...>
+          class Variant,
+          template <typename...>
+          class Tuple>
       using value_types = Variant<Tuple<>>;
 
       template <template <typename...> class Variant>
@@ -114,9 +116,7 @@ class context {
     private:
       friend scheduler;
 
-      explicit schedule_task(context* loop) noexcept
-        : loop_(loop)
-      {}
+      explicit schedule_task(context* loop) noexcept : loop_(loop) {}
 
       context* const loop_;
     };
@@ -125,10 +125,8 @@ class context {
 
     explicit scheduler(context* loop) noexcept : loop_(loop) {}
 
-   public:
-    schedule_task schedule() const noexcept {
-      return schedule_task{loop_};
-    }
+  public:
+    schedule_task schedule() const noexcept { return schedule_task{loop_}; }
 
     friend bool operator==(scheduler a, scheduler b) noexcept {
       return a.loop_ == b.loop_;
@@ -137,19 +135,57 @@ class context {
       return a.loop_ != b.loop_;
     }
 
-   private:
+  private:
     context* loop_;
   };
 
-  scheduler get_scheduler() {
-    return scheduler{this};
-  }
+  scheduler get_scheduler() { return scheduler{this}; }
 
   void run();
 
   void stop();
 
- private:
+private:
+  struct _tail_sender : tail_sender_base {
+    struct _op_base : tail_operation_state_base {
+      // infinite
+      inline explicit operator bool() noexcept { return true; }
+      [[nodiscard]] _tail_sender start() noexcept;
+      void unwind() noexcept;
+      context* const loop_;
+    };
+    template <typename Receiver>
+    struct _op : _op_base {
+      Receiver r_;
+      [[nodiscard]] _tail_sender start() noexcept {
+        auto next = _op_base::start();
+        unifex::set_value(std::move(r_));
+        return next;
+      }
+      void unwind() noexcept {
+        _op_base::unwind();
+        unifex::set_done(std::move(r_));
+      }
+    };
+    template <typename Receiver>
+    [[nodiscard]] inline _op<Receiver> connect(Receiver r) noexcept {
+      return {{{}, loop_}, r};
+    }
+    context* const loop_;
+  };
+
+public:
+  // add the tail_sender returned to a resume_tail_senders_until_one_remaining()
+  // along with other tail_senders to interleave scheduled items with the other
+  // tail_senders
+  //
+  // WARNING: this is an infinite tail_sender - it is only safe to use with
+  // resume_tail_senders_until_one_remaining() and even then it is only safe if
+  // it is the only infinite tail_sender given to
+  // resume_tail_senders_until_one_remaining()
+  _tail_sender get_tail_sender() noexcept { return {{}, this}; }
+
+private:
   void enqueue(task_base* task);
 
   std::mutex mutex_;
@@ -164,9 +200,9 @@ inline void _op<Receiver>::type::start() noexcept {
   loop_->enqueue(this);
 }
 
-} // namespace _manual_event_loop
+}  // namespace _manual_event_loop
 
 using manual_event_loop = _manual_event_loop::context;
-} // namespace unifex
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

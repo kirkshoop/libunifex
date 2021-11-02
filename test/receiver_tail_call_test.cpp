@@ -22,6 +22,7 @@
 #include <unifex/sync_wait.hpp>
 #include <unifex/then.hpp>
 #include <unifex/timed_single_thread_context.hpp>
+#include <unifex/when_all.hpp>
 #include <unifex/with_query_value.hpp>
 
 #include <chrono>
@@ -77,4 +78,53 @@ TEST(ReceiverTailCall, ForLoop) {
                            .count()) /
                 iterations)
             << " ns-per-iteration\n";
+}
+
+TEST(ReceiverTailCall, ScheduleEachRepeat) {
+  unifex::timed_single_thread_context time;
+  std::int64_t iterations = 0;
+  sync_wait(
+      schedule()                               //
+      | then([&iterations] { ++iterations; })  //
+      | repeat_effect()                        //
+      | unifex::stop_when(
+            unifex::schedule_after(time.get_scheduler(), loopDuration))  //
+      | let_done([] { return just(); })                                  //
+      |
+      then([&iterations] {
+        std::cout << "result: there were " << iterations << " iterations in "
+                  << loopDuration.count() << "s which is "
+                  << (double(
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              loopDuration)
+                              .count()) /
+                      iterations)
+                  << " ns-per-iteration\n";
+      }));
+}
+
+TEST(ReceiverTailCall, InterleaveScheduleEachRepeatLoops) {
+  unifex::timed_single_thread_context time;
+  std::int64_t iterations = 0;
+  auto loop = [&]() {
+    return schedule()                            //
+        | then([&iterations] { ++iterations; })  //
+        | repeat_effect();
+  };
+  sync_wait(
+      when_all(loop(), loop()) |
+      unifex::stop_when(
+          unifex::schedule_after(time.get_scheduler(), loopDuration))  //
+      | let_done([] { return just(); })                                //
+      |
+      then([&iterations](auto&&...) {
+        std::cout << "result: there were " << iterations << " iterations in "
+                  << loopDuration.count() << "s which is "
+                  << (double(
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              loopDuration)
+                              .count()) /
+                      iterations)
+                  << " ns-per-iteration\n";
+      }));
 }

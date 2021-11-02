@@ -18,11 +18,33 @@
 namespace unifex {
 namespace _manual_event_loop {
 
+context::_tail_sender context::_tail_sender::_op_base::start() noexcept {
+  if (loop_->head_ == nullptr) {
+    return {{}, loop_};
+  }
+  std::unique_lock lock{loop_->mutex_};
+  if (loop_->head_ == nullptr) {
+    return {{}, loop_};
+  }
+  auto* task = loop_->head_;
+  loop_->head_ = task->next_;
+  if (loop_->head_ == nullptr) {
+    loop_->tail_ = nullptr;
+  }
+  lock.unlock();
+  task->execute();
+  return {{}, loop_};
+}
+void context::_tail_sender::_op_base::unwind() noexcept {
+  loop_->stop();
+}
+
 void context::run() {
   std::unique_lock lock{mutex_};
   while (true) {
     while (head_ == nullptr) {
-      if (stop_) return;
+      if (stop_)
+        return;
       cv_.wait(lock);
     }
     auto* task = head_;
@@ -54,5 +76,5 @@ void context::enqueue(task_base* task) {
   cv_.notify_one();
 }
 
-} // _manual_event_loop
-} // unifex
+}  // namespace _manual_event_loop
+}  // namespace unifex

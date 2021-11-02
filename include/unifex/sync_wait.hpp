@@ -121,8 +121,13 @@ UNIFEX_CLANG_DISABLE_OPTIMIZATION std::optional<Result> _impl(Sender&& sender) {
   auto operation =
       connect((Sender &&) sender, _sync_wait::receiver_t<Result>{promise, ctx});
 
-  resume_tail_sender(result_or_null_tail_sender(unifex::start, operation));
+  // ctx.get_tail_sender() is intentionally infinite, so this will only return
+  // if it is the last tail standing
+  (void)resume_tail_senders_until_one_remaining(
+      result_or_null_tail_sender(unifex::start, operation),
+      ctx.get_tail_sender());
 
+  // drain
   ctx.run();
 
   switch (promise.state_) {

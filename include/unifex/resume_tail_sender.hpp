@@ -305,11 +305,12 @@ template(typename Receiver, typename... Cs)        //
   return _resume_tail_senders_until_one_remaining(
       std::index_sequence_for<Cs...>{}, r, cs...);
 }
-template(typename C0, typename... Cs)  //
-    (requires                          //
-     (tail_sender<C0>) AND             //
-     (all_true<tail_sender<Cs>...>))   //
-    auto resume_tail_senders_until_one_remaining(C0 c0, Cs... cs) noexcept {
+template(typename C0, typename... Cs)                  //
+    (requires                                          //
+     (!tail_receiver<C0>) AND                          //
+     (all_true<tail_sender<C0>, tail_sender<Cs>...>))  //
+    [[nodiscard]] auto resume_tail_senders_until_one_remaining(
+        C0 c0, Cs... cs) noexcept {
   return _resume_tail_senders_until_one_remaining(
       std::index_sequence_for<C0, Cs...>{}, null_tail_receiver{}, c0, cs...);
 }
