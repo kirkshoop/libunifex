@@ -71,8 +71,8 @@ struct tail_start<std::index_sequence<IdxN...>, Receiver, Senders...> {
   using op_t = operation_tuple<0, Receiver, Senders...>;
   struct type : tail_operation_state_base {
     auto start() noexcept {
-      return resume_tail_senders_until_one_remaining(result_or_null_tail_sender(
-          unifex::start, op_->template get<IdxN>())...);
+      return resume_tail_senders_until_one_remaining(
+          op_->template start<IdxN>()...);
     }
 
     void unwind() noexcept { stopSource_->request_stop(); }
@@ -110,16 +110,16 @@ struct _operation_tuple<Index, Receiver, First, Rest...>::type
   template(size_t Index2)  //
       (requires            //
        (Index2 > Index))   //
-      auto& get() {
-    return operation_tuple<Index + 1, Receiver, Rest...>::template get<
+      auto start() {
+    return operation_tuple<Index + 1, Receiver, Rest...>::template start<
         Index2>();
   }
 
   template(size_t Index2)  //
       (requires            //
        (Index2 == Index))  //
-      auto& get() {
-    return op_;
+      auto start() {
+    return result_or_null_tail_sender(unifex::start, op_);
   }
 
 private:
@@ -136,8 +136,8 @@ struct _operation_tuple<Index, Receiver>::type {
   explicit type(Parent&) noexcept {}
 
   template <std::size_t>
-  auto& get() noexcept {
-    return unifex::connect(null_tail_sender{}, null_tail_receiver{});
+  null_tail_sender start() noexcept {
+    return {};
   }
 };
 
@@ -348,8 +348,6 @@ private:
       Receiver&>::template callback_type<cancel_operation>>
       stopCallback_;
   Receiver receiver_;
-  template <std::size_t Index>
-  using op_element_receiver = element_receiver<Index, Receiver, Senders...>;
   operation_tuple<0, op_element_receiver, Senders...> ops_;
 };
 
