@@ -59,6 +59,31 @@ TEST(ReceiverTailCall, Smoke) {
       | with_query_value(unifex::get_scheduler, time.get_scheduler()));
 }
 
+TEST(ReceiverTailCall, InterleaveRepeatLoops) {
+  unifex::timed_single_thread_context time;
+  std::array<std::int64_t, 2> iterations = {};
+  auto loop = [&](int id) {
+    return just()                                                 //
+        | then([&iterations = iterations[id]] { ++iterations; })  //
+        | repeat_effect();
+  };
+  sync_wait(
+      when_all(loop(0), loop(1)) |
+      unifex::stop_when(
+          unifex::schedule_after(time.get_scheduler(), loopDuration))  //
+      | let_done([] { return just(); })                                //
+      | then([&iterations](auto&&...) {
+          std::cout
+              << "result: there were " << iterations[0] << "+" << iterations[1]
+              << " iterations in " << loopDuration.count() << "s which is "
+              << (double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             loopDuration)
+                             .count()) /
+                  (iterations[0] + iterations[1]))
+              << " ns-per-iteration\n";
+        }));
+}
+
 TEST(ReceiverTailCall, ForLoop) {
   unifex::timed_single_thread_context time;
   std::int64_t iterations = 0;
@@ -105,26 +130,25 @@ TEST(ReceiverTailCall, ScheduleEachRepeat) {
 
 TEST(ReceiverTailCall, InterleaveScheduleEachRepeatLoops) {
   unifex::timed_single_thread_context time;
-  std::int64_t iterations = 0;
-  auto loop = [&]() {
-    return schedule()                            //
-        | then([&iterations] { ++iterations; })  //
+  std::array<std::int64_t, 2> iterations = {};
+  auto loop = [&](int id) {
+    return schedule()                                             //
+        | then([&iterations = iterations[id]] { ++iterations; })  //
         | repeat_effect();
   };
   sync_wait(
-      when_all(loop(), loop()) |
+      when_all(loop(0), loop(1)) |
       unifex::stop_when(
           unifex::schedule_after(time.get_scheduler(), loopDuration))  //
       | let_done([] { return just(); })                                //
-      |
-      then([&iterations](auto&&...) {
-        std::cout << "result: there were " << iterations << " iterations in "
-                  << loopDuration.count() << "s which is "
-                  << (double(
-                          std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              loopDuration)
-                              .count()) /
-                      iterations)
-                  << " ns-per-iteration\n";
-      }));
+      | then([&iterations](auto&&...) {
+          std::cout
+              << "result: there were " << iterations[0] << "+" << iterations[1]
+              << " iterations in " << loopDuration.count() << "s which is "
+              << (double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             loopDuration)
+                             .count()) /
+                  (iterations[0] + iterations[1]))
+              << " ns-per-iteration\n";
+        }));
 }
