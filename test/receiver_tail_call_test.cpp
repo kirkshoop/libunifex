@@ -152,3 +152,33 @@ TEST(ReceiverTailCall, InterleaveScheduleEachRepeatLoops) {
               << " ns-per-iteration\n";
         }));
 }
+
+TEST(ReceiverTailCall, InterleaveJustAndScheduleEachRepeatLoops) {
+  unifex::timed_single_thread_context time;
+  std::array<std::int64_t, 2> iterations = {};
+  auto jloop = [&](int id) {
+    return just()                                                 //
+        | then([&iterations = iterations[id]] { ++iterations; })  //
+        | repeat_effect();
+  };
+  auto sloop = [&](int id) {
+    return schedule()                                             //
+        | then([&iterations = iterations[id]] { ++iterations; })  //
+        | repeat_effect();
+  };
+  sync_wait(
+      when_all(jloop(0), sloop(1)) |
+      unifex::stop_when(
+          unifex::schedule_after(time.get_scheduler(), loopDuration))  //
+      | let_done([] { return just(); })                                //
+      | then([&iterations](auto&&...) {
+          std::cout
+              << "result: there were " << iterations[0] << "+" << iterations[1]
+              << " iterations in " << loopDuration.count() << "s which is "
+              << (double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             loopDuration)
+                             .count()) /
+                  (iterations[0] + iterations[1]))
+              << " ns-per-iteration\n";
+        }));
+}
