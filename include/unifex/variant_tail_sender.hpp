@@ -39,6 +39,7 @@ struct _variant_tail_sender : tail_sender_base {
   static_assert(sizeof...(Cs) >= 2);
   static_assert(types_are_unique_v<Cs...>);
   static_assert(all_true<_tail_sender<Cs>...>);
+  static_assert(all_true<!std::is_void_v<Cs>...>);
   static_assert(
       all_true<(unifex::blocking_v<Cs> == blocking_kind::always_inline)...>);
 
@@ -46,13 +47,26 @@ struct _variant_tail_sender : tail_sender_base {
     state.template construct<invalid>();
   }
 
-  template(typename C)                                          //
-      (requires                                                 //
-       (_tail_sender<C>) &&                                     //
-       (one_of<C, replace_void_with_null_tail_sender<Cs>...>))  //
+  template(typename C)        //
+      (requires               //
+       (_tail_sender<C>) AND  //
+       (one_of<C, Cs...>))    //
       _variant_tail_sender(C c) noexcept
     : tag(-1) {
     emplace(std::move(c));
+  }
+
+  template <typename CPO, typename Target, typename... AN>
+  using cpo_result_t =
+      replace_void_with_null_tail_sender<callable_result_t<CPO, Target, AN...>>;
+
+  template(typename CPO, typename Target, typename... AN)  //
+      (requires                                            //
+       (is_callable_v<CPO, Target, AN...>) AND             //
+       (_tail_sender<cpo_result_t<CPO, Target, AN...>>))   //
+      _variant_tail_sender(CPO cpo, Target&& t, AN&&... an) noexcept
+    : tag(-1) {
+    emplace(result_or_null_tail_sender(cpo, (Target &&) t, (AN &&) an...));
   }
 
   _variant_tail_sender(const _variant_tail_sender& o) = default;
@@ -65,9 +79,7 @@ struct _variant_tail_sender : tail_sender_base {
        (all_true<
            (unifex::blocking_v<Cs> == blocking_kind::always_inline)...>) &&  //
        (all_true<_tail_sender<OtherCs>...>)&&                                //
-       (all_true<one_of<
-            replace_void_with_null_tail_sender<OtherCs>,
-            replace_void_with_null_tail_sender<Cs>...>...>))  //
+       (all_true<one_of<OtherCs, Cs...>...>))                                //
       _variant_tail_sender(_variant_tail_sender<OtherCs...> c) noexcept {
     c.visit([this](auto other_c) noexcept {
       *this = _variant_tail_sender(other_c);
@@ -86,6 +98,18 @@ struct _variant_tail_sender : tail_sender_base {
     } else {
       tag = index_of_v<C, Cs...>;
     }
+  }
+
+  template(typename... OtherCs)  //
+      (requires                  //
+       (all_true<
+           (unifex::blocking_v<Cs> == blocking_kind::always_inline)...>) &&  //
+       (all_true<_tail_sender<OtherCs>...>)&&                                //
+       (all_true<one_of<OtherCs, Cs...>...>))                                //
+      void emplace(_variant_tail_sender<OtherCs...> c) noexcept {
+    c.visit([this](auto other_c) noexcept {
+      *this = _variant_tail_sender(other_c);
+    });
   }
 
   template <typename C>

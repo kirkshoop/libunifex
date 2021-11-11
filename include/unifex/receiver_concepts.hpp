@@ -112,8 +112,6 @@ public:
     static_assert(
         is_nothrow_tag_invocable_v<_set_error_fn, Receiver, Error>,
         "set_error() invocation is required to be noexcept.");
-    static_assert(
-        std::is_void_v<tag_invoke_result_t<_set_error_fn, Receiver, Error>>);
     return unifex::tag_invoke(
         _set_error_fn{}, (Receiver &&) r, (Error &&) error);
   }
@@ -148,7 +146,6 @@ public:
     static_assert(
         is_nothrow_tag_invocable_v<_set_done_fn, Receiver>,
         "set_done() invocation is required to be noexcept.");
-    static_assert(std::is_void_v<tag_invoke_result_t<_set_done_fn, Receiver>>);
     return unifex::tag_invoke(_set_done_fn{}, (Receiver &&) r);
   }
   template(typename Receiver)                             //

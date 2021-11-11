@@ -176,6 +176,42 @@ template(typename C, typename Receiver = null_tail_receiver)  //
   }
 }
 
+namespace _resume_detail {
+template <typename CPO, typename Target, typename... AN>
+using cpo_result_t =
+    replace_void_with_null_tail_sender<callable_result_t<CPO, Target, AN...>>;
+}  // namespace _resume_detail
+
+template(
+    typename Receiver,
+    typename CPO,
+    typename Target,
+    typename... AN)           //
+    (requires                 //
+     (receiver<Receiver>) &&  //
+     (tail_sender_to<
+         _resume_detail::cpo_result_t<CPO, Target, AN...>,
+         Receiver>))  //
+    void resume_tail_sender(Receiver r, CPO cpo, Target&& t, AN&&... an) {
+  resume_tail_sender(
+      result_or_null_tail_sender(cpo, (Target &&) t, (AN &&) an...), r);
+}
+
+template(
+    typename CPO,
+    typename Target,
+    typename... AN)       //
+    (requires             //
+     (!receiver<CPO>) &&  //
+     (tail_sender_to<
+         _resume_detail::cpo_result_t<CPO, Target, AN...>,
+         null_tail_receiver>))  //
+    void resume_tail_sender(CPO cpo, Target&& t, AN&&... an) {
+  resume_tail_sender(
+      result_or_null_tail_sender(cpo, (Target &&) t, (AN &&) an...),
+      null_tail_receiver{});
+}
+
 // start_one and result_or_null have to cooperate
 // to ensure that the result is not overwritten by a
 // a terminating tail_sender as this would terminate

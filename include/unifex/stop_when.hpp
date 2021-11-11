@@ -25,6 +25,7 @@
 #include <unifex/tag_invoke.hpp>
 #include <unifex/type_list.hpp>
 #include <unifex/type_traits.hpp>
+#include <unifex/variant_tail_sender.hpp>
 
 #include <atomic>
 #include <functional>

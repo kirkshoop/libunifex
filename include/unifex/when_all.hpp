@@ -26,6 +26,7 @@
 #include <unifex/std_concepts.hpp>
 #include <unifex/type_list.hpp>
 #include <unifex/type_traits.hpp>
+#include <unifex/variant_tail_sender.hpp>
 
 #include <atomic>
 #include <cstddef>
