@@ -22,8 +22,8 @@
 #include <unifex/manual_lifetime.hpp>
 #include <unifex/receiver_concepts.hpp>
 #include <unifex/resume_tail_sender.hpp>
-#include <unifex/sender_concepts.hpp>
 #include <unifex/tag_invoke.hpp>
+#include <unifex/tail_sender_concepts.hpp>
 #include <unifex/type_list.hpp>
 #include <unifex/type_traits.hpp>
 #include <unifex/variant_tail_sender.hpp>
