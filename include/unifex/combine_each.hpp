@@ -17,11 +17,13 @@
 
 #include <unifex/config.hpp>
 
+#include <unifex/packaged_callable.hpp>
 #include <unifex/resume_tail_sender.hpp>
 #include <unifex/sequence_concepts.hpp>
 #include <unifex/then.hpp>
+#include <unifex/variant_tail_sender.hpp>
 
-#include <unifex/packaged_callable.hpp>
+#include <variant>
 
 // combine_each() - a sequence algorithm
 //
@@ -37,13 +39,17 @@
 namespace unifex {
 namespace _cmb_cpo {
 inline constexpr struct combine_fn {
-  template <typename Receiver>
+  template <typename Receiver, typename Errors>
   struct succ_rcvr {
     struct type;
   };
-  template <typename Receiver>
+  template <typename Receiver, typename Errors>
   struct state;
-  template <typename Receiver, typename SenderFactory, typename... SeqN>
+  template <
+      typename Receiver,
+      typename SenderFactory,
+      typename Errors,
+      typename... SeqN>
   struct op {
     struct type;
   };
@@ -56,23 +62,26 @@ inline constexpr struct combine_fn {
     return {std::make_tuple(std::move(seqN)...)};
   }
 } combine_each;
-template <typename Receiver>
-struct combine_fn::succ_rcvr<Receiver>::type {
-  friend auto tag_invoke(unifex::tag_t<unifex::set_value>, type&& self) {
-    return unifex::set_value(std::move(self.op_->rec_));
+template <typename Receiver, typename Errors>
+struct combine_fn::succ_rcvr<Receiver, Errors>::type {
+  using result_t = variant_tail_sender<
+      callable_result_t<
+          unifex::tag_t<unifex::set_error>,
+          Receiver,
+          std::exception_ptr>,
+      callable_result_t<unifex::tag_t<unifex::set_done>, Receiver>,
+      callable_result_t<unifex::tag_t<unifex::set_value>, Receiver>>;
+  friend result_t tag_invoke(unifex::tag_t<unifex::set_value>, type&& self) {
+    return {self.op_->complete(unifex::set_value)};
   }
   template <typename Error>
-  friend auto tag_invoke(
+  friend result_t tag_invoke(
       unifex::tag_t<unifex::set_error>, type&& self, Error&& error) noexcept {
-    auto op = self.op_;
-    // end sequence with the error
-    return unifex::set_error(std::move(op->rec_), (Error &&) error);
+    return {self.op_->complete(unifex::set_error, (Error &&) error)};
   }
-  friend auto
+  friend result_t
   tag_invoke(unifex::tag_t<unifex::set_done>, type&& self) noexcept {
-    auto op = self.op_;
-    // end sequence with the cancellation
-    return unifex::set_done(std::move(op->rec_));
+    return {self.op_->complete(unifex::set_done)};
   }
   template(typename CPO, typename R)               //
       (requires                                    //
@@ -91,18 +100,67 @@ struct combine_fn::succ_rcvr<Receiver>::type {
       unifex::tag_t<unifex::visit_continuations>, const type& r, Func&& func) {
     std::invoke(func, std::as_const(r.get_receiver()));
   }
-  state<Receiver>* op_;
+  state<Receiver, Errors>* op_;
 };
-template <typename Receiver>
+template <typename Receiver, typename Errors>
 struct combine_fn::state {
   Receiver rec_;
+  std::atomic<int> started_;
+  std::atomic_flag error_flag_;
+  std::optional<Errors> error_;
+
+  template <typename Receiver2>
+  explicit state(Receiver2&& rec)
+    : rec_((Receiver2 &&) rec)
+    , started_(0)
+    , error_flag_(false)
+    , error_() {}
+
+  using result_t = variant_tail_sender<
+      null_tail_sender,
+      callable_result_t<
+          unifex::tag_t<unifex::set_error>,
+          Receiver,
+          std::exception_ptr>,
+      callable_result_t<unifex::tag_t<unifex::set_done>, Receiver>,
+      callable_result_t<unifex::tag_t<unifex::set_value>, Receiver>>;
+  template <typename CPO, typename... AN>
+  result_t complete(CPO, AN... an) {
+    if constexpr (same_as<unifex::tag_t<unifex::set_error>, CPO>) {
+      if (error_flag_.test_and_set()) {
+        error_.emplace(an...);
+      }
+    }
+    if (--started_ == 0) {
+      auto token = get_stop_token(rec_);
+      if (token.stop_requested()) {
+        // set_done calls are ignored. only a stop
+        // request will result in set_done
+        return {set_done(std::move(rec_))};
+      } else if (error_flag_.test()) {
+        // replay the first error encountered
+        return {std::visit(
+            [this](auto& e) { return set_error(std::move(rec_), e); },
+            *error_)};
+      } else {
+        // this is the result for set_done and set_value cases
+        return {set_value(std::move(rec_))};
+      }
+    } else {
+      return null_tail_sender{};
+    }
+  }
 };
-template <typename Receiver, typename SenderFactory, typename... SeqN>
-struct combine_fn::op<Receiver, SenderFactory, SeqN...>::type {
-  using succ_rcvr_t = typename succ_rcvr<Receiver>::type;
+template <
+    typename Receiver,
+    typename SenderFactory,
+    typename Errors,
+    typename... SeqN>
+struct combine_fn::op<Receiver, SenderFactory, Errors, SeqN...>::type {
+  using succ_rcvr_t = typename succ_rcvr<Receiver, Errors>::type;
   using op_t = std::tuple<
       sequence_connect_result_t<SeqN, succ_rcvr_t, SenderFactory>...>;
-  state<Receiver> st_;
+  state<Receiver, Errors> st_;
   op_t opn_;
 
   template <
@@ -115,7 +173,7 @@ struct combine_fn::op<Receiver, SenderFactory, SeqN...>::type {
       SenderFactory2&& sf,
       SeqN2&& seqn,
       std::index_sequence<Idx...>)
-    : st_({(Receiver2 &&) rec})
+    : st_((Receiver2 &&) rec)
     , opn_(packaged_callable(
           sequence_connect,
           std::get<Idx>((SeqN2 &&) seqn),
@@ -124,6 +182,7 @@ struct combine_fn::op<Receiver, SenderFactory, SeqN...>::type {
 
   friend auto tag_invoke(unifex::tag_t<unifex::start>, type& self) noexcept {
     // need to put this into a tail_sender and return that tail_sender
+    self.st_.started_ = sizeof...(SeqN);
     return std::apply(
         [](auto&... op) {
           return unifex::resume_tail_senders_until_one_remaining(
@@ -153,11 +212,14 @@ struct combine_fn::sender<SeqN...>::type {
   static constexpr bool sends_done = true;
 
   template <typename Receiver, typename SenderFactory>
-  friend typename op<Receiver, SenderFactory, SeqN...>::type tag_invoke(
-      unifex::tag_t<unifex::sequence_connect>,
-      const type& self,
-      Receiver&& receiver,
-      SenderFactory&& sf) {
+  friend
+      typename op<Receiver, SenderFactory, error_types<std::variant>, SeqN...>::
+          type
+          tag_invoke(
+              unifex::tag_t<unifex::sequence_connect>,
+              const type& self,
+              Receiver&& receiver,
+              SenderFactory&& sf) {
     return {
         (Receiver &&) receiver,
         (SenderFactory &&) sf,

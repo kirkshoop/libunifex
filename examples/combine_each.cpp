@@ -41,8 +41,9 @@ int main() {
       unifex::timed_single_thread_context{}};
 
   {
-    printf("in 200ms tick every 1ms and stop after 6 samples\n");
-    printf("sample every 100 ticks, report the delta between the actual and "
+    printf("in 200ms have two threads tick every 3ms and 5ms respectively and "
+           "stop after 12 samples\n");
+    printf("sample every ~100ms, report the delta between the actual and "
            "expected time\n");
 
     auto start = std::chrono::steady_clock::now();
