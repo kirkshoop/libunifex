@@ -38,6 +38,12 @@ using clock_t = std::chrono::steady_clock;
 using time_point = typename clock_t::time_point;
 
 struct task_base {
+  ~task_base() {  //
+    context_ = nullptr;
+    next_ = nullptr;
+    prevNextPtr_ = nullptr;
+    execute_ = nullptr;
+  }
   using execute_fn = void(task_base*) noexcept;
 
   explicit task_base(
@@ -45,7 +51,7 @@ struct task_base {
     : context_(&context)
     , execute_(execute) {}
 
-  timed_single_thread_context* const context_;
+  timed_single_thread_context* context_;
   task_base* next_ = nullptr;
   task_base** prevNextPtr_ = nullptr;
   execute_fn* execute_;

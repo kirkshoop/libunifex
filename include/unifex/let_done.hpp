@@ -34,29 +34,71 @@
 namespace unifex {
 
 namespace _let_d {
-template <typename Source, typename Done, typename Receiver>
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
 struct _op {
   class type;
 };
-template <typename Source, typename Done, typename Receiver>
-using operation_type =
-    typename _op<Source, Done, remove_cvref_t<Receiver>>::type;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+using operation_type = typename _op<
+    Source,
+    Done,
+    remove_cvref_t<Receiver>,
+    Tag,
+    SenderFactory...>::type;
 
-template <typename Source, typename Done, typename Receiver>
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
 struct _rcvr {
   class type;
 };
-template <typename Source, typename Done, typename Receiver>
-using receiver_type =
-    typename _rcvr<Source, Done, remove_cvref_t<Receiver>>::type;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+using receiver_type = typename _rcvr<
+    Source,
+    Done,
+    remove_cvref_t<Receiver>,
+    Tag,
+    SenderFactory...>::type;
 
-template <typename Source, typename Done, typename Receiver>
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
 struct _frcvr {
   class type;
 };
-template <typename Source, typename Done, typename Receiver>
-using final_receiver_type =
-    typename _frcvr<Source, Done, remove_cvref_t<Receiver>>::type;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+using final_receiver_type = typename _frcvr<
+    Source,
+    Done,
+    remove_cvref_t<Receiver>,
+    Tag,
+    SenderFactory...>::type;
 
 template <typename Source, typename Done>
 struct _sndr {
@@ -66,9 +108,15 @@ struct _sndr {
 template <typename Source, typename Done>
 using _sender = typename _sndr<Source, Done>::type;
 
-template <typename Source, typename Done, typename Receiver>
-class _frcvr<Source, Done, Receiver>::type {
-  using operation = operation_type<Source, Done, Receiver>;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+class _frcvr<Source, Done, Receiver, Tag, SenderFactory...>::type {
+  using operation =
+      operation_type<Source, Done, Receiver, Tag, SenderFactory...>;
   using tail_done = callable_result_t<tag_t<unifex::set_done>, Receiver>;
 
   Receiver&& consume_receiver() {
@@ -81,23 +129,31 @@ public:
 
   type(type&& other) noexcept : op_(std::exchange(other.op_, {})) {}
 
-  template(typename... Values)(requires receiver_of<Receiver, Values...>) auto set_value(
-      Values&&... values) noexcept(is_nothrow_receiver_of_v<Receiver, Values...>) {
+  template(typename... Values)                     //
+      (requires receiver_of<Receiver, Values...>)  //
+      auto set_value(Values&&... values)           //
+      noexcept(is_nothrow_receiver_of_v<Receiver, Values...>) {
     return unifex::set_value(consume_receiver(), (Values &&) values...);
   }
 
   tail_done set_done() noexcept { return unifex::set_done(consume_receiver()); }
 
-  template(typename Error)(requires receiver<Receiver, Error>) auto set_error(
-      Error&& error) noexcept {
+  template(typename Error)                  //
+      (requires receiver<Receiver, Error>)  //
+      auto set_error(Error&& error) noexcept {
     return unifex::set_error(consume_receiver(), (Error &&) error);
   }
 
 private:
-  template(typename CPO)(requires is_receiver_query_cpo_v<CPO> AND is_callable_v<CPO, const Receiver&>) friend auto tag_invoke(
-      CPO cpo,
-      const type& r) noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
-      -> callable_result_t<CPO, const Receiver&> {
+  template(typename CPO)                       //
+      (requires                                //
+       (is_receiver_query_cpo_v<CPO>) AND      //
+       (is_callable_v<CPO, const Receiver&>))  //
+      friend auto tag_invoke(
+          CPO cpo,
+          const type& r)  //
+      noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
+          -> callable_result_t<CPO, const Receiver&> {
     return std::move(cpo)(r.get_receiver());
   }
 
@@ -105,8 +161,8 @@ private:
   friend void tag_invoke(
       tag_t<visit_continuations>,
       const type& r,
-      VisitFunc&&
-          func) noexcept(is_nothrow_callable_v<VisitFunc&, const Receiver&>) {
+      VisitFunc&& func)  //
+      noexcept(is_nothrow_callable_v<VisitFunc&, const Receiver&>) {
     func(r.get_receiver());
   }
 
@@ -118,10 +174,17 @@ private:
   operation* op_;
 };
 
-template <typename Source, typename Done, typename Receiver>
-class _rcvr<Source, Done, Receiver>::type {
-  using operation = operation_type<Source, Done, Receiver>;
-  using final_receiver = final_receiver_type<Source, Done, Receiver>;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+class _rcvr<Source, Done, Receiver, Tag, SenderFactory...>::type {
+  using operation =
+      operation_type<Source, Done, Receiver, Tag, SenderFactory...>;
+  using final_receiver =
+      final_receiver_type<Source, Done, Receiver, Tag, SenderFactory...>;
   using final_sender_t = callable_result_t<Done&>;
   using final_op_t = connect_result_t<final_sender_t, final_receiver>;
   using set_done_tail_t = variant_tail_sender<
@@ -141,27 +204,34 @@ public:
 
   type(type&& other) noexcept : op_(std::exchange(other.op_, {})) {}
 
-  template(typename... Values)(requires receiver_of<Receiver, Values...>) auto set_value(
-      Values&&... values) noexcept(is_nothrow_receiver_of_v<Receiver, Values...>) {
+  template(typename... Values)                     //
+      (requires receiver_of<Receiver, Values...>)  //
+      auto set_value(Values&&... values)           //
+      noexcept(is_nothrow_receiver_of_v<Receiver, Values...>) {
     UNIFEX_ASSERT(op_ != nullptr);
     return unifex::set_value(consume_receiver(), (Values &&) values...);
   }
 
   set_done_tail_t set_done() noexcept;
 
-  template(typename Error)(requires receiver<Receiver, Error>) auto set_error(
-      Error&& error) noexcept {
+  template(typename Error)                  //
+      (requires receiver<Receiver, Error>)  //
+      auto set_error(Error&& error) noexcept {
     UNIFEX_ASSERT(op_ != nullptr);
     return unifex::set_error(consume_receiver(), (Error &&) error);
   }
 
 private:
-  template(typename CPO, typename Self)(
-      requires is_receiver_query_cpo_v<CPO> AND
-          same_as<remove_cvref_t<Self>, type> AND is_callable_v<
-              CPO,
-              const Receiver&>) friend auto tag_invoke(CPO cpo, Self&& r) noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
-      -> callable_result_t<CPO, const Receiver&> {
+  template(typename CPO, typename Self)           //
+      (requires                                   //
+       (is_receiver_query_cpo_v<CPO>) AND         //
+       (same_as<remove_cvref_t<Self>, type>) AND  //
+       (is_callable_v<
+           CPO,
+           const Receiver&>))                    //
+      friend auto tag_invoke(CPO cpo, Self&& r)  //
+      noexcept(is_nothrow_callable_v<CPO, const Receiver&>)
+          -> callable_result_t<CPO, const Receiver&> {
     return std::move(cpo)(r.get_receiver());
   }
 
@@ -182,21 +252,52 @@ private:
   operation* op_;
 };
 
-template <typename Source, typename Done, typename Receiver>
-class _op<Source, Done, Receiver>::type {
-  using source_receiver = receiver_type<Source, Done, Receiver>;
-  using final_receiver = final_receiver_type<Source, Done, Receiver>;
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+class _op<Source, Done, Receiver, Tag, SenderFactory...>::type {
+  using source_receiver =
+      receiver_type<Source, Done, Receiver, Tag, SenderFactory...>;
+  using final_receiver =
+      final_receiver_type<Source, Done, Receiver, Tag, SenderFactory...>;
 
 public:
-  template <typename Done2, typename Receiver2>
-  explicit type(Source&& source, Done2&& done, Receiver2&& dest) noexcept(
-      std::is_nothrow_move_constructible_v<Receiver>&&
-          std::is_nothrow_move_constructible_v<Done>&&
-              is_nothrow_connectable_v<Source, source_receiver>)
+  template <typename Source2, typename Done2, typename Receiver2>
+  explicit type(Source2&& source, Done2&& done, Receiver2&& dest)  //
+      noexcept(                                                    //
+          (std::is_nothrow_move_constructible_v<Receiver>)&&       //
+          (std::is_nothrow_move_constructible_v<Done>)&&           //
+          (is_nothrow_connectable_v<Source, source_receiver>))     //
     : done_((Done2 &&) done)
     , receiver_((Receiver2 &&) dest) {
     unifex::activate_union_member_with(sourceOp_, [&] {
-      return unifex::connect((Source &&) source, source_receiver{this});
+      return unifex::connect((Source2 &&) source, source_receiver{this});
+    });
+    startedOp_ = 0 + 1;
+  }
+
+  template <
+      typename Source2,
+      typename Done2,
+      typename Receiver2,
+      typename SenderFactory2>
+  explicit type(
+      Source2&& source,
+      Done2&& done,
+      Receiver2&& dest,
+      SenderFactory2&& sf)                                      //
+      noexcept(                                                 //
+          (std::is_nothrow_move_constructible_v<Receiver>)&&    //
+          (std::is_nothrow_move_constructible_v<Done>)&&        //
+          (is_nothrow_connectable_v<Source, source_receiver>))  //
+    : done_((Done2 &&) done)
+    , receiver_((Receiver2 &&) dest) {
+    unifex::activate_union_member_with(sourceOp_, [&] {
+      return unifex::sequence_connect(
+          (Source2 &&) source, source_receiver{this}, (SenderFactory2 &&) sf);
     });
     startedOp_ = 0 + 1;
   }
@@ -216,7 +317,8 @@ private:
   friend source_receiver;
   friend final_receiver;
 
-  using source_op_t = connect_result_t<Source, source_receiver>;
+  using source_op_t =
+      callable_result_t<Tag, Source, source_receiver, SenderFactory...>;
 
   using final_sender_t = callable_result_t<Done>;
 
@@ -231,9 +333,16 @@ private:
   };
 };
 
-template <typename Source, typename Done, typename Receiver>
-typename _rcvr<Source, Done, Receiver>::type::set_done_tail_t
-_rcvr<Source, Done, Receiver>::type::set_done() noexcept {
+template <
+    typename Source,
+    typename Done,
+    typename Receiver,
+    typename Tag,
+    typename... SenderFactory>
+typename _rcvr<Source, Done, Receiver, Tag, SenderFactory...>::type::
+    set_done_tail_t
+    _rcvr<Source, Done, Receiver, Tag, SenderFactory...>::type::
+        set_done() noexcept {
   UNIFEX_ASSERT(op_ != nullptr);
   auto op = op_;  // preserve pointer value.
   if constexpr (
@@ -287,41 +396,129 @@ public:
   static constexpr bool sends_done = sender_traits<final_sender_t>::sends_done;
 
   template <typename Source2, typename Done2>
-  explicit type(Source2&& source, Done2&& done) noexcept(
-      std::is_nothrow_constructible_v<Source, Source2>&&
-          std::is_nothrow_constructible_v<Done, Done2>)
+  explicit type(Source2&& source, Done2&& done)                 //
+      noexcept(                                                 //
+          (std::is_nothrow_constructible_v<Source, Source2>)&&  //
+          (std::is_nothrow_constructible_v<Done, Done2>))
     : source_((Source2 &&) source)
     , done_((Done2 &&) done) {}
 
   template(
       typename Sender,
       typename Receiver,
-      typename SourceReceiver =
-          receiver_type<member_t<Sender, Source>, Done, Receiver>,
-      typename FinalReceiver =
-          final_receiver_type<member_t<Sender, Source>, Done, Receiver>)(
-      requires same_as<remove_cvref_t<Sender>, type> AND receiver<Receiver> AND constructible_from<
+      typename SourceReceiver = receiver_type<
+          member_t<Sender, Source>,
           Done,
-          member_t<
-              Sender,
-              Done>> AND constructible_from<remove_cvref_t<Receiver>, Receiver>
-          AND sender_to<member_t<Sender, Source>, SourceReceiver> AND sender_to<
-              final_sender_t,
-              FinalReceiver>) friend auto tag_invoke(tag_t<unifex::connect>, Sender&& s, Receiver&& r) noexcept(is_nothrow_connectable_v<member_t<Sender, Source>, SourceReceiver>&&
-                                                                                                                    std::is_nothrow_constructible_v<
-                                                                                                                        Done,
-                                                                                                                        member_t<
-                                                                                                                            Sender,
-                                                                                                                            Done>>&&
-                                                                                                                        std::is_nothrow_constructible_v<
-                                                                                                                            remove_cvref_t<
-                                                                                                                                Receiver>,
-                                                                                                                            Receiver>)
-      -> operation_type<member_t<Sender, Source>, Done, Receiver> {
-    return operation_type<member_t<Sender, Source>, Done, Receiver>{
+          Receiver,
+          tag_t<unifex::connect>>,
+      typename FinalReceiver = final_receiver_type<
+          member_t<Sender, Source>,
+          Done,
+          Receiver,
+          tag_t<unifex::connect>>)                  //
+      (requires                                     //
+       (same_as<remove_cvref_t<Sender>, type>) AND  //
+       (receiver<Receiver>) AND                     //
+       (constructible_from<
+           Done,
+           member_t<
+               Sender,
+               Done>>) AND                                           //
+       (constructible_from<remove_cvref_t<Receiver>, Receiver>) AND  //
+       (sender_to<member_t<Sender, Source>, SourceReceiver>) AND     //
+       (sender_to<
+           final_sender_t,
+           FinalReceiver>))  //
+      friend auto tag_invoke(
+          tag_t<unifex::connect>, Sender&& s, Receiver&& r)  //
+      noexcept(
+          (is_nothrow_connectable_v<
+              member_t<Sender, Source>,
+              SourceReceiver>)&&                                             //
+          (std::is_nothrow_constructible_v<Done, member_t<Sender, Done>>)&&  //
+          (std::is_nothrow_constructible_v<
+              remove_cvref_t<Receiver>,
+              Receiver>))  //
+      -> operation_type<
+          member_t<Sender, Source>,
+          Done,
+          Receiver,
+          tag_t<unifex::connect>> {
+    return operation_type<
+        member_t<Sender, Source>,
+        Done,
+        Receiver,
+        tag_t<unifex::connect>>{
         static_cast<Sender&&>(s).source_,
         static_cast<Sender&&>(s).done_,
         static_cast<Receiver&&>(r)};
+  }
+
+  template(
+      typename Sender,
+      typename Receiver,
+      typename SenderFactory,
+      typename SourceReceiver = receiver_type<
+          member_t<Sender, Source>,
+          Done,
+          Receiver,
+          tag_t<sequence_connect>,
+          SenderFactory>,
+      typename FinalReceiver = final_receiver_type<
+          member_t<Sender, Source>,
+          Done,
+          Receiver,
+          tag_t<sequence_connect>,
+          SenderFactory>)                           //
+      (requires                                     //
+       (same_as<remove_cvref_t<Sender>, type>) AND  //
+       (receiver<Receiver>) AND                     //
+       (constructible_from<
+           Done,
+           member_t<
+               Sender,
+               Done>>) AND                                           //
+       (constructible_from<remove_cvref_t<Receiver>, Receiver>) AND  //
+       (sequence_sender_to<
+           member_t<Sender, Source>,
+           SourceReceiver,
+           SenderFactory>) AND  //
+       (sender_to<
+           final_sender_t,
+           FinalReceiver>))  //
+      friend auto tag_invoke(
+          tag_t<sequence_connect>,
+          Sender&& s,
+          Receiver&& r,
+          SenderFactory&& sf)  //
+      noexcept(
+          (is_nothrow_callable_v<
+              tag_t<sequence_connect>,
+              member_t<Sender, Source>,
+              SourceReceiver,
+              SenderFactory>)&&  //
+          (std::is_nothrow_constructible_v<
+              Done,
+              member_t<
+                  Sender,
+                  Done>>)&&  //
+          (std::is_nothrow_constructible_v<remove_cvref_t<Receiver>, Receiver>))
+          -> operation_type<
+              member_t<Sender, Source>,
+              Done,
+              Receiver,
+              tag_t<sequence_connect>,
+              SenderFactory> {
+    return operation_type<
+        member_t<Sender, Source>,
+        Done,
+        Receiver,
+        tag_t<sequence_connect>,
+        SenderFactory>{
+        static_cast<Sender&&>(s).source_,
+        static_cast<Sender&&>(s).done_,
+        static_cast<Receiver&&>(r),
+        static_cast<SenderFactory&&>(sf)};
   }
 
 private:
@@ -331,36 +528,45 @@ private:
 
 namespace _cpo {
 struct _fn {
-  template(typename Source, typename Done)(
-      requires tag_invocable<_fn, Source, Done> AND sender<Source> AND
-          callable<remove_cvref_t<Done>> AND
-              sender<callable_result_t<remove_cvref_t<Done>>>) auto
-  operator()(Source&& source, Done&& done) const
+  template(typename Source, typename Done)                 //
+      (requires                                            //
+       (tag_invocable<_fn, Source, Done>) AND              //
+       (sender<Source>) AND                                //
+       (callable<remove_cvref_t<Done>>) AND                //
+       (sender<callable_result_t<remove_cvref_t<Done>>>))  //
+      auto
+      operator()(Source&& source, Done&& done) const  //
       noexcept(is_nothrow_tag_invocable_v<_fn, Source, Done>)
           -> tag_invoke_result_t<_fn, Source, Done> {
     return tag_invoke(*this, (Source &&) source, (Done &&) done);
   }
 
-  template(typename Source, typename Done)(
-      requires(!tag_invocable<_fn, Source, Done>) AND sender<Source> AND
-          constructible_from<remove_cvref_t<Source>, Source> AND
-              constructible_from<remove_cvref_t<Done>, Done> AND
-                  callable<remove_cvref_t<Done>> AND
-                      sender<callable_result_t<remove_cvref_t<Done>>>) auto
-  operator()(Source&& source, Done&& done) const
-      noexcept(std::is_nothrow_constructible_v<
-               _sender<remove_cvref_t<Source>, remove_cvref_t<Done>>,
-               Source,
-               Done>) -> _sender<remove_cvref_t<Source>, remove_cvref_t<Done>> {
+  template(typename Source, typename Done)                         //
+      (requires                                                    //
+       (!tag_invocable<_fn, Source, Done>) AND sender<Source> AND  //
+       (constructible_from<remove_cvref_t<Source>, Source>) AND    //
+       (constructible_from<remove_cvref_t<Done>, Done>) AND        //
+       (callable<remove_cvref_t<Done>>) AND                        //
+       (sender<callable_result_t<remove_cvref_t<Done>>>))          //
+      auto
+      operator()(Source&& source, Done&& done) const noexcept(  //
+          std::is_nothrow_constructible_v<
+              _sender<remove_cvref_t<Source>, remove_cvref_t<Done>>,
+              Source,
+              Done>)  //
+      -> _sender<remove_cvref_t<Source>, remove_cvref_t<Done>> {
     return _sender<remove_cvref_t<Source>, remove_cvref_t<Done>>{
         (Source &&) source, (Done &&) done};
   }
-  template(typename Done)(
-      requires callable<remove_cvref_t<Done>> AND
-          sender<callable_result_t<remove_cvref_t<Done>>>) constexpr auto
-  operator()(Done&& done) const
-      noexcept(is_nothrow_callable_v<tag_t<bind_back>, _fn, Done>)
-          -> bind_back_result_t<_fn, Done> {
+
+  template(typename Done)                                  //
+      (requires                                            //
+       (callable<remove_cvref_t<Done>>) AND                //
+       (sender<callable_result_t<remove_cvref_t<Done>>>))  //
+      constexpr auto
+      operator()(Done&& done) const                                 //
+      noexcept(is_nothrow_callable_v<tag_t<bind_back>, _fn, Done>)  //
+      -> bind_back_result_t<_fn, Done> {
     return bind_back(*this, (Done &&) done);
   }
 };

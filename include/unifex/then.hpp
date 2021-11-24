@@ -161,8 +161,8 @@ private:
   // - type_list<type_list<Result>> - if Result is non-void, or
   // - type_list<type_list<>>       - if Result is void
   template <typename... Args>
-  using result = type_list<typename detail::result_overload<
-      std::invoke_result_t<Func, Args...>>::type>;
+  using result = type_list<
+      typename detail::result_overload<callable_result_t<Func, Args...>>::type>;
 
 public:
   template <
@@ -245,7 +245,8 @@ public:
                _then::sender<Sender, Func>,
                Sender,
                Func>) -> _result_t<Sender, Func> {
-    return _then::sender<Sender, Func>{(Sender &&) predecessor, (Func &&) func};
+    return _then::sender<Sender, remove_cvref_t<Func>>{
+        (Sender &&) predecessor, (Func &&) func};
   }
   template <typename Func>
   constexpr auto operator()(Func&& func) const

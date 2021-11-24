@@ -85,11 +85,10 @@ int main() {
         // arrived
         reduce_each(
             counter{},
-            [&](counter count, const auto& itemSender) {
-              int thisCount = count.inc();
+            [&](const auto& itemSender) {
               return itemSender |  //
-                  unifex::then([&, count, thisCount](
-                                   [[maybe_unused]] auto tpl) {
+                  unifex::then([&](counter count, [[maybe_unused]] auto tpl) {
+                       int thisCount = count.inc();
                        auto& [id, actual, intended] = tpl;
                        auto delta =
                            std::chrono::duration_cast<

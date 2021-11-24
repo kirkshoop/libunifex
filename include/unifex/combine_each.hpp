@@ -136,20 +136,49 @@ struct combine_fn::state {
       if (token.stop_requested()) {
         // set_done calls are ignored. only a stop
         // request will result in set_done
-        return {set_done(std::move(rec_))};
+        return result_or_null_tail_sender(set_done, std::move(rec_));
       } else if (error_flag_.test()) {
         // replay the first error encountered
         return {std::visit(
-            [this](auto& e) { return set_error(std::move(rec_), e); },
+            [this](auto& e) {
+              return result_or_null_tail_sender(set_error, std::move(rec_), e);
+            },
             *error_)};
       } else {
         // this is the result for set_done and set_value cases
-        return {set_value(std::move(rec_))};
+        return result_or_null_tail_sender(set_value, std::move(rec_));
       }
     } else {
       return null_tail_sender{};
     }
   }
+};
+template <
+    typename Receiver,
+    typename SenderFactory,
+    typename Errors,
+    typename... SeqN>
+struct _tail_start {
+  using op_t =
+      typename combine_fn::op<Receiver, SenderFactory, Errors, SeqN...>::type;
+  struct type : tail_operation_state_base {
+    op_t* op_;
+    auto start() noexcept {
+      op_->st_.started_ = sizeof...(SeqN);
+      return std::apply(
+          [](auto&... op) {
+            return unifex::resume_tail_senders_until_one_remaining(
+                unifex::result_or_null_tail_sender(unifex::start, op)...);
+          },
+          op_->opn_);
+    }
+    void unwind() noexcept {
+      resume_tail_sender(result_or_null_tail_sender(
+          unifex::set_done(std::move(op_->receiver_))));
+    }
+  };
+  op_t* op_;
+  constexpr type operator()() noexcept { return {{}, op_}; }
 };
 template <
     typename Receiver,
@@ -181,14 +210,7 @@ struct combine_fn::op<Receiver, SenderFactory, Errors, SeqN...>::type {
           (SenderFactory2 &&) sf)...) {}
 
   friend auto tag_invoke(unifex::tag_t<unifex::start>, type& self) noexcept {
-    // need to put this into a tail_sender and return that tail_sender
-    self.st_.started_ = sizeof...(SeqN);
-    return std::apply(
-        [](auto&... op) {
-          return unifex::resume_tail_senders_until_one_remaining(
-              unifex::result_or_null_tail_sender(unifex::start, op)...);
-        },
-        self.opn_);
+    return tail(_tail_start<Receiver, SenderFactory, Errors, SeqN...>{&self});
   }
 };
 template <typename... SeqN>
@@ -212,19 +234,30 @@ struct combine_fn::sender<SeqN...>::type {
   static constexpr bool sends_done = true;
 
   template <typename Receiver, typename SenderFactory>
-  friend
+  using op_t =
       typename op<Receiver, SenderFactory, error_types<std::variant>, SeqN...>::
-          type
-          tag_invoke(
-              unifex::tag_t<unifex::sequence_connect>,
-              const type& self,
-              Receiver&& receiver,
-              SenderFactory&& sf) {
-    return {
+          type;
+
+  template(typename T, typename Receiver, typename SenderFactory)  //
+      (requires                                                    //
+       (same_as<remove_cvref_t<T>, type>))                         //
+      friend op_t<Receiver, SenderFactory> tag_invoke(
+          unifex::tag_t<unifex::sequence_connect>,
+          T&& self,
+          Receiver&& receiver,
+          SenderFactory&& sf)  //
+      noexcept(
+          (is_nothrow_callable_v<
+               tag_t<unifex::sequence_connect>,
+               member_t<T, SeqN>,
+               typename succ_rcvr<Receiver, error_types<std::variant>>::type,
+               SenderFactory> &&
+           ...)) {
+    return op_t<Receiver, SenderFactory>(
         (Receiver &&) receiver,
         (SenderFactory &&) sf,
-        self.seqn_,
-        std::make_index_sequence<sizeof...(SeqN)>{}};
+        static_cast<T&&>(self).seqn_,
+        std::make_index_sequence<sizeof...(SeqN)>{});
   }
 };
 }  // namespace _cmb_cpo

@@ -100,6 +100,8 @@ template <
     typename... SF>
 class _op<CPO, Value, Sender, Receiver, ConnectCpo, SF...>::type {
 public:
+  type(const type&) = delete;
+  type(type&&) = delete;
   template <typename Receiver2, typename Value2, typename... SF2>
   explicit type(
       Sender&& sender, Receiver2&& receiver, Value2&& value, SF2&&... sf)
@@ -151,16 +153,16 @@ public:
     : sender_((Sender2 &&) sender)
     , value_((Value &&) value) {}
 
-  template(typename Self, typename Receiver)(
-      requires                                                //
-      (same_as<remove_cvref_t<Self>, type>) AND               //
-      (constructible_from<Value, member_t<Self, Value>>) AND  //
-      (sender_to<
-          member_t<Self, Sender>,
-          receiver_wrapper<
-              CPO,
-              Value,
-              remove_cvref_t<Receiver>>>))  //
+  template(typename Self, typename Receiver)                   //
+      (requires                                                //
+       (same_as<remove_cvref_t<Self>, type>) AND               //
+       (constructible_from<Value, member_t<Self, Value>>) AND  //
+       (sender_to<
+           member_t<Self, Sender>,
+           receiver_wrapper<
+               CPO,
+               Value,
+               remove_cvref_t<Receiver>>>))  //
       friend auto tag_invoke(
           tag_t<unifex::connect>,
           Self&& s,

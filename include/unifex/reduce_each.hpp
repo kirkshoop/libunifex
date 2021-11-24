@@ -17,6 +17,8 @@
 
 #include <unifex/config.hpp>
 
+#include <unifex/just.hpp>
+#include <unifex/let_value.hpp>
 #include <unifex/sequence_concepts.hpp>
 #include <unifex/then.hpp>
 
@@ -151,7 +153,11 @@ struct reduce_fn::
     template <typename ItemSender>
     auto operator()(ItemSender&& itemSender) {
       return state_->af_(
-                 std::as_const(state_->v_), (ItemSender &&) itemSender) |  //
+                 (ItemSender &&) itemSender |
+                 let_value([state_ = this->state_](auto&&... vn) {
+                   return just(
+                       std::as_const(state_->v_), (decltype(vn)&&)vn...);
+                 })) |  //
           then([state_ = this->state_](Value newValue) {
                state_->v_ = std::move(newValue);
              });
@@ -207,11 +213,30 @@ struct reduce_fn::sender<Predecessor, Value, AccumulatorFactory>::type {
 
   static constexpr bool sends_done = sender_traits<Predecessor>::sends_done;
 
-  template <typename Receiver>
-  friend typename op<Predecessor, Receiver, Value, AccumulatorFactory>::type
-  tag_invoke(
-      unifex::tag_t<unifex::connect>, const type& self, Receiver&& receiver) {
-    return {self.predecessor_, (Receiver &&) receiver, self.v_, self.af_};
+  template <typename Sender, typename Receiver>
+  using op_t = typename op<
+      Sender,
+      Receiver,
+      remove_cvref_t<Value>,
+      remove_cvref_t<AccumulatorFactory>>::type;
+
+  template(typename T, typename Receiver)              //
+      (requires                                        //
+       (same_as<remove_cvref_t<T>, type>))             //
+      friend op_t<member_t<T, Predecessor>, Receiver>  //
+      tag_invoke(
+          unifex::tag_t<unifex::connect>,
+          T&& self,
+          Receiver&& receiver)  //
+      noexcept(is_nothrow_callable_v<
+               tag_t<unifex::connect>,
+               member_t<T, Predecessor>,
+               typename op_t<member_t<T, Predecessor>, Receiver>::update>) {
+    return {
+        static_cast<T&&>(self).predecessor_,
+        (Receiver &&) receiver,
+        static_cast<T&&>(self).v_,
+        static_cast<T&&>(self).af_};
   }
 };
 }  // namespace _rdc_cpo

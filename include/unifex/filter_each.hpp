@@ -22,6 +22,8 @@
 #include <unifex/sequence_concepts.hpp>
 #include <unifex/variant_tail_sender.hpp>
 
+#include <unifex/then.hpp>
+
 // filter_each() - a sequence algorithm
 //
 // takes a Predicate
@@ -39,6 +41,7 @@
 //
 
 #include <unifex/detail/prologue.hpp>
+#include "sender_concepts.hpp"
 namespace unifex {
 namespace _flt_cpo {
 inline constexpr struct filter_fn {
@@ -65,9 +68,10 @@ inline constexpr struct filter_fn {
     struct type;
   };
   template <typename Predecessor, typename Predicate>
-  auto operator()(Predecessor s, Predicate keep) const ->
-      typename sender<Predecessor, Predicate>::type {
-    return {std::move(s), std::move(keep)};
+  auto operator()(Predecessor&& s, Predicate&& keep) const ->
+      typename sender<remove_cvref_t<Predecessor>, remove_cvref_t<Predicate>>::
+          type {
+    return {(Predecessor &&) s, (Predicate &&) keep};
   }
   template <typename Predicate>
   constexpr auto operator()(Predicate&& keep) const
@@ -92,11 +96,17 @@ struct filter_fn::alt_op<ItemOp, NoneOp>::type {
     }
   }
 
-  template <typename Sender, typename Receiver>
-  type(Sender&& sender, Receiver&& receiver)
+  template(typename Sender, typename Receiver)  //
+      (requires                                 //
+       (one_of<
+           remove_cvref_t<connect_result_t<Sender, Receiver>>,
+           NoneOp,
+           ItemOp>))  //
+      type(Sender&& sender, Receiver&& receiver)
     : started_(false)
-    , filtered_(same_as<connect_result_t<Sender, Receiver>, NoneOp>) {
-    using op_t = connect_result_t<Sender, Receiver>;
+    , filtered_(
+          same_as<remove_cvref_t<connect_result_t<Sender, Receiver>>, NoneOp>) {
+    using op_t = remove_cvref_t<connect_result_t<Sender, Receiver>>;
     unifex::activate_union_member_with<op_t>(op_, [&] {
       return unifex::connect((Sender &&) sender, (Receiver &&) receiver);
     });
@@ -128,10 +138,13 @@ struct filter_fn::alt_sender<ItemSender, NoneSender>::type {
       unifex::deactivate_union_member<ItemSender>(sender_);
     }
   }
-  template <typename Sender>
-  explicit type(Sender&& sender)
+  template(typename Sender)                                       //
+      (requires                                                   //
+       (!same_as<remove_cvref_t<Sender>, type>) AND               //
+       (one_of<remove_cvref_t<Sender>, NoneSender, ItemSender>))  //
+      explicit type(Sender&& sender)
     : filtered_(same_as<remove_cvref_t<Sender>, NoneSender>) {
-    unifex::activate_union_member_with<Sender>(
+    unifex::activate_union_member_with<remove_cvref_t<Sender>>(
         sender_, [&] { return (Sender &&) sender; });
   }
 
@@ -148,15 +161,34 @@ struct filter_fn::alt_sender<ItemSender, NoneSender>::type {
   static constexpr bool sends_done = sender_traits<ItemSender>::sends_done;
 
   template <typename Receiver>
-  friend typename alt_op<
-      connect_result_t<ItemSender, Receiver>,
-      connect_result_t<NoneSender, Receiver>>::type
-  tag_invoke(
-      unifex::tag_t<unifex::connect>, const type& self, Receiver&& receiver) {
+  using alt_op_t = typename alt_op<
+      remove_cvref_t<connect_result_t<ItemSender, Receiver>>,
+      remove_cvref_t<connect_result_t<NoneSender, Receiver>>>::type;
+
+  template(typename T, typename Receiver)   //
+      (requires                             //
+       (same_as<remove_cvref_t<T>, type>))  //
+      friend alt_op_t<Receiver>             //
+      tag_invoke(
+          unifex::tag_t<unifex::connect>,
+          T&& self,
+          Receiver&& receiver)  //
+      noexcept((is_nothrow_callable_v<
+                tag_t<unifex::connect>,
+                member_t<T, NoneSender>,
+                Receiver>)&&  //
+               (is_nothrow_callable_v<
+                   tag_t<unifex::connect>,
+                   member_t<T, ItemSender>,
+                   Receiver>)) {
     if (self.filtered_) {
-      return {self.sender_.template get<NoneSender>(), (Receiver &&) receiver};
+      return alt_op_t<Receiver>(
+          static_cast<T&&>(self).sender_.template get<NoneSender>(),
+          (Receiver &&) receiver);
     } else {
-      return {self.sender_.template get<ItemSender>(), (Receiver &&) receiver};
+      return alt_op_t<Receiver>(
+          static_cast<T&&>(self).sender_.template get<ItemSender>(),
+          (Receiver &&) receiver);
     }
   }
 };
@@ -176,21 +208,21 @@ struct filter_fn::op<Predecessor, SuccessorReceiver, SenderFactory, Predicate>::
   struct filter_each {
     template <typename ItemSender>
     auto operator()(ItemSender&& itemSender) {
-      auto item = [state = this->state_](auto&&... vn) {
-        return state->sf_(just((decltype(vn)&&)vn...));
+      [[maybe_unused]] auto item = [this](auto&&... vn) {
+        return this->state_->sf_(just((decltype(vn)&&)vn...));
       };
-      auto none = [] {
+      [[maybe_unused]] auto none = [] {
         return just();
       };
       return (ItemSender &&) itemSender |  //
-          let_value([none, item, state = this->state_](auto&&... vn) {
+          let_value([this, none, item]([[maybe_unused]] auto&&... vn) {
                using alt_sender_t = typename alt_sender<
-                   decltype(item((decltype(vn)&&)vn...)),
-                   decltype(none())>::type;
-               if (state->keep_(std::as_const(vn)...)) {
-                 return alt_sender_t{item((decltype(vn)&&)vn...)};
+                   remove_cvref_t<decltype(item((decltype(vn)&&)vn...))>,
+                   remove_cvref_t<decltype(none())>>::type;
+               if (this->state_->keep_(std::as_const(vn)...)) {
+                 return alt_sender_t(item((decltype(vn)&&)vn...));
                }
-               return alt_sender_t{none()};
+               return alt_sender_t(none());
              });
     }
     state_t* state_;
@@ -239,18 +271,29 @@ struct filter_fn::sender<Predecessor, Predicate>::type {
 
   static constexpr bool sends_done = sender_traits<Predecessor>::sends_done;
 
-  template <typename Receiver, typename SenderFactory>
-  friend typename op<Predecessor, Receiver, SenderFactory, Predicate>::type
-  tag_invoke(
-      unifex::tag_t<unifex::sequence_connect>,
-      const type& self,
-      Receiver&& receiver,
-      SenderFactory&& sf) {
-    return {
-        self.predecessor_,
+  template <typename Sender, typename Receiver, typename SenderFactory>
+  using op_t = typename op<Sender, Receiver, SenderFactory, Predicate>::type;
+
+  template(typename T, typename Receiver, typename SenderFactory)  //
+      (requires                                                    //
+       (same_as<remove_cvref_t<T>, type>))                         //
+      friend op_t<member_t<T, Predecessor>, Receiver, SenderFactory> tag_invoke(
+          unifex::tag_t<unifex::sequence_connect>,
+          T&& self,
+          Receiver&& receiver,
+          SenderFactory&& sf)  //
+      noexcept(
+          is_nothrow_callable_v<
+              tag_t<unifex::sequence_connect>,
+              member_t<T, Predecessor>,
+              Receiver,
+              typename op_t<member_t<T, Predecessor>, Receiver, SenderFactory>::
+                  filter_each>) {
+    return op_t<member_t<T, Predecessor>, Receiver, SenderFactory>(
+        static_cast<T&&>(self).predecessor_,
         (Receiver &&) receiver,
         (SenderFactory &&) sf,
-        self.keep_};
+        static_cast<T&&>(self).keep_);
   }
 };
 }  // namespace _flt_cpo

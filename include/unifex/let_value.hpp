@@ -33,11 +33,45 @@
 #include <type_traits>
 
 #include <unifex/detail/prologue.hpp>
+#include "unifex/scope_guard.hpp"
 
 namespace unifex {
 namespace _let_v {
 template <typename... Values>
 using decayed_tuple = std::tuple<std::decay_t<Values>...>;
+
+template <
+    typename NextTail,
+    typename Operation,
+    typename Receiver,
+    typename... Values>
+struct _tail_destroy {
+  using op_t = Operation;
+
+  using values_t = decayed_tuple<Values...>;
+
+  struct type : tail_operation_state_base {
+    NextTail start() noexcept {
+      using successor_operation_t =
+          typename op_t::template successor_operation<Values...>;
+      unifex::deactivate_union_member<successor_operation_t>(op_.succOp_);
+      op_.values_.template destruct<values_t>();
+      return nextTail_;
+    }
+    void unwind() noexcept {
+      using successor_operation_t =
+          typename op_t::template successor_operation<Values...>;
+      unifex::deactivate_union_member<successor_operation_t>(op_.succOp_);
+      op_.values_.template destruct<values_t>();
+      nextTail_.unwind();
+    }
+    op_t& op_;
+    NextTail nextTail_;
+  };
+  constexpr type operator()() noexcept { return type{{}, op_, nextTail_}; }
+  op_t& op_;
+  NextTail nextTail_;
+};
 
 template <typename Operation, typename Receiver, typename... Values>
 struct _successor_receiver {
@@ -62,29 +96,54 @@ struct _successor_receiver<Operation, Receiver, Values...>::type {
   }
 
   template <typename... SuccessorValues>
-  variant_tail_sender<
+  using value_tail_t = replace_void_with_null_tail_sender<callable_result_t<
+      tag_t<unifex::set_value>,
+      receiver_type,
+      SuccessorValues...>>;
+
+  template <typename... SuccessorValues>
+  using tail_destroy_t = _tail_destroy<
+      value_tail_t<SuccessorValues...>,
+      Operation,
+      Receiver,
+      Values...>;
+
+  template <typename... SuccessorValues>
+  using tail_t = callable_result_t<
+      tag_t<unifex::tail>,
+      tail_destroy_t<SuccessorValues...>>;
+
+  template <typename... SuccessorValues>
+  using result_t = variant_tail_sender<
       callable_result_t<
-          tag_t<unifex::set_value>,
-          receiver_type,
-          SuccessorValues...>,
+          tag_t<unifex::tail>,
+          tail_destroy_t<SuccessorValues...>>,
       callable_result_t<
           tag_t<unifex::set_error>,
           receiver_type,
-          std::exception_ptr>>
-  set_value(SuccessorValues&&... values) && noexcept {
+          std::exception_ptr>>;
+
+  template <typename... SuccessorValues>
+  result_t<SuccessorValues...>
+  set_value([[maybe_unused]] SuccessorValues&&... values) && noexcept {
     UNIFEX_TRY {
-      // Taking by value here to force a copy on the offchance the value
-      // objects lives in the operation state (e.g., just), in which
+      // delay cleanup on the off chance some or all of the value
+      // objects live in the operation state (e.g., just), in which
       // case the call to cleanup() would invalidate them.
-      return [this](auto... copies) {
-        cleanup();
-        return unifex::set_value(
-            std::move(op_.receiver_), (decltype(copies)&&)copies...);
-      }((SuccessorValues &&) values...);
+      return tail(tail_destroy_t<SuccessorValues...>{
+          op_,
+          // also delay the tail from our op owner until after we
+          // cleanup() in our tail
+          result_or_null_tail_sender(
+              unifex::set_value,
+              std::move(op_.receiver_),
+              (SuccessorValues &&) values...)});
     }
     UNIFEX_CATCH(...) {
-      return unifex::set_error(
-          std::move(op_.receiver_), std::current_exception());
+      return result_or_null_tail_sender(
+          unifex::set_error,
+          std::move(op_.receiver_),
+          std::current_exception());
     }
   }
 
@@ -94,7 +153,7 @@ struct _successor_receiver<Operation, Receiver, Values...>::type {
     return unifex::set_done(std::move(op_.receiver_));
   }
 
-  // Taking by value here to force a copy on the offchance the error
+  // Taking by value here to force a copy on the off chance the error
   // object lives in the operation state (e.g., just_error), in which
   // case the call to cleanup() would invalidate it.
   template <typename Error>
@@ -127,6 +186,64 @@ private:
   }
 };
 
+template <typename Operation, typename Receiver, typename... Values>
+struct _tail_start {
+  using op_t = Operation;
+
+  using successor_operation_t =
+      typename Operation::template successor_operation<Values...>;
+
+  using successor_receiver_t =
+      successor_receiver<Operation, Receiver, Values...>;
+
+  using values_t = decayed_tuple<Values...>;
+
+  struct type : tail_operation_state_base {
+    variant_tail_sender<
+        callable_result_t<tag_t<unifex::start>, successor_operation_t&>,
+        callable_result_t<
+            tag_t<unifex::set_error>,
+            Receiver,
+            std::exception_ptr>>
+    start() noexcept {
+      auto& op = op_;
+      UNIFEX_TRY {
+        // end predecessor op lifetime (this allows the predecessor op to do
+        // things after the completion signal and before resuming this tail)
+        unifex::deactivate_union_member(op.predOp_);
+
+        scope_guard destroyValues = [&]() noexcept {
+          op.values_.template destruct<values_t>();
+        };
+        auto& succOp = unifex::activate_union_member<successor_operation_t>(
+            op.succOp_,
+            packaged_callable(
+                unifex::connect,
+                std::apply(
+                    std::move(op.func_), op.values_.template get<values_t>()),
+                successor_receiver_t{op}));
+        destroyValues.release();
+        return result_or_null_tail_sender(unifex::start, succOp);
+      }
+      UNIFEX_CATCH(...) {
+        return result_or_null_tail_sender(
+            unifex::set_error,
+            std::move(op.receiver_),
+            std::current_exception());
+      }
+    }
+    void unwind() noexcept {
+      auto& op = op_;
+      unifex::deactivate_union_member(op.predOp_);
+      op.values_.template destruct<values_t>();
+      resume_tail_sender(unifex::set_done, std::move(op.receiver_));
+    }
+    op_t& op_;
+  };
+  constexpr type operator()() noexcept { return type{{}, op_}; }
+  op_t& op_;
+};
+
 template <typename Operation, typename Receiver>
 struct _predecessor_receiver {
   struct type;
@@ -150,33 +267,23 @@ struct _predecessor_receiver<Operation, Receiver>::type {
 
   template <typename... Values>
   variant_tail_sender<
-      callable_result_t<tag_t<unifex::start>, successor_operation<Values...>&>,
+      callable_result_t<
+          tag_t<unifex::tail>,
+          _tail_start<Operation, Receiver, Values...>>,
       callable_result_t<
           tag_t<unifex::set_error>,
           receiver_type,
           std::exception_ptr>>
-  set_value(Values&&... values) && noexcept {
+  set_value([[maybe_unused]] Values&&... values) && noexcept {
     auto& op = op_;
     UNIFEX_TRY {
       scope_guard destroyPredOp = [&]() noexcept {
         unifex::deactivate_union_member(op.predOp_);
       };
-      auto& valueTuple =
-          op.values_.template construct<decayed_tuple<Values...>>(
-              (Values &&) values...);
-      destroyPredOp.reset();
-      scope_guard destroyValues = [&]() noexcept {
-        op.values_.template destruct<decayed_tuple<Values...>>();
-      };
-      auto& succOp =
-          unifex::activate_union_member_with<successor_operation<Values...>>(
-              op.succOp_, [&] {
-                return unifex::connect(
-                    std::apply(std::move(op.func_), valueTuple),
-                    successor_receiver<Operation, Receiver, Values...>{op});
-              });
-      destroyValues.release();
-      return unifex::start(succOp);
+      op.values_.template construct<decayed_tuple<Values...>>((Values &&)
+                                                                  values...);
+      destroyPredOp.release();
+      return tail(_tail_start<Operation, Receiver, Values...>{op_});
     }
     UNIFEX_CATCH(...) {
       return result_or_null_tail_sender(
@@ -191,7 +298,7 @@ struct _predecessor_receiver<Operation, Receiver>::type {
     return unifex::set_done(std::move(op.receiver_));
   }
 
-  // Taking by value here to force a copy on the offchange the error
+  // Taking by value here to force a copy on the off chance the error
   // object lives in the operation state, in which case destroying the
   // predecessor operation state would invalidate it.
   template <typename Error>
@@ -242,6 +349,14 @@ struct _op<Predecessor, SuccessorFactory, Receiver>::type {
       successor_receiver<operation, Receiver, Values...>>;
 
   friend predecessor_receiver<operation, Receiver>;
+  template <
+      typename NextTail,
+      typename Operation,
+      typename Receiver2,
+      typename... Values>
+  friend struct _tail_destroy;
+  template <typename Operation, typename Receiver2, typename... Values>
+  friend struct _tail_start;
   template <typename Operation, typename Receiver2, typename... Values>
   friend struct _successor_receiver;
 

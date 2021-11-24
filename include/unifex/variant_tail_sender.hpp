@@ -62,6 +62,16 @@ struct _variant_tail_sender : tail_sender_base {
 
   template(typename CPO, typename Target, typename... AN)  //
       (requires                                            //
+       (!_tail_sender<CPO>) AND                            //
+       (!is_callable_v<CPO, Target, AN...>))               //
+      _variant_tail_sender(CPO, Target&&, AN&&...) noexcept
+    : tag(-1) {
+    static_assert(is_callable_v<CPO, Target, AN...>, "CPO invocation failed");
+  }
+
+  template(typename CPO, typename Target, typename... AN)  //
+      (requires                                            //
+       (!_tail_sender<CPO>) AND                            //
        (is_callable_v<CPO, Target, AN...>) AND             //
        (_tail_sender<cpo_result_t<CPO, Target, AN...>>))   //
       _variant_tail_sender(CPO cpo, Target&& t, AN&&... an) noexcept
@@ -77,9 +87,10 @@ struct _variant_tail_sender : tail_sender_base {
   template(typename... OtherCs)  //
       (requires                  //
        (all_true<
-           (unifex::blocking_v<Cs> == blocking_kind::always_inline)...>) &&  //
-       (all_true<_tail_sender<OtherCs>...>)&&                                //
-       (all_true<one_of<OtherCs, Cs...>...>))                                //
+           (unifex::blocking_v<OtherCs> ==
+            blocking_kind::always_inline)...>) &&  //
+       (all_true<_tail_sender<OtherCs>...>)&&      //
+       (all_true<one_of<OtherCs, Cs...>...>))      //
       _variant_tail_sender(_variant_tail_sender<OtherCs...> c) noexcept {
     c.visit([this](auto other_c) noexcept {
       *this = _variant_tail_sender(other_c);

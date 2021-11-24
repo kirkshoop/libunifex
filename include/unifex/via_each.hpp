@@ -17,137 +17,112 @@
 
 #include <unifex/config.hpp>
 
+#include <unifex/scheduler_concepts.hpp>
 #include <unifex/sequence_concepts.hpp>
-#include <unifex/then.hpp>
+#include <unifex/via.hpp>
 
-// then_each() - a sequence algorithm
-//
-// takes a Function
-//
-// The Function takes the value_types of the predecessor
-// and returns the new value
-//
-// returns the new value (returning a pack is not
-// supported in the language). A pack can be returned as a tuple.
-// The tuple will not be silently unpacked - the tuple will be
-// passed to set_value unchanged
+// via_each() - a sequence algorithm
 //
 // fixed overhead and fully-typed and supports lock-step
 //
 //
 
 #include <unifex/detail/prologue.hpp>
+#include "scheduler_concepts.hpp"
 namespace unifex {
-namespace _thn_cpo {
-namespace detail {
-template <typename Result, typename = void>
-struct result_overload {
-  using type = type_list<Result>;
-};
-template <typename Result>
-struct result_overload<Result, std::enable_if_t<std::is_void_v<Result>>> {
-  using type = type_list<>;
-};
-}  // namespace detail
-inline constexpr struct then_fn {
-  template <typename SenderFactory, typename Transform>
+namespace _via_cpo {
+inline constexpr struct via_fn {
+  template <typename SenderFactory, typename Scheduler>
   struct state;
   template <
       typename Predecessor,
       typename SuccessorReceiver,
       typename SenderFactory,
-      typename Transform>
+      typename Scheduler>
   struct op {
     struct type;
   };
-  template <typename Predecessor, typename Transform>
+  template <typename Predecessor>
   struct sender {
     struct type;
   };
-  template <typename Predecessor, typename Transform>
-  auto operator()(Predecessor&& s, Transform&& trns) const  //
-      ->
-      typename sender<remove_cvref_t<Predecessor>, remove_cvref_t<Transform>>::
-          type {
-    return {(Predecessor &&) s, (Transform &&) trns};
+  template <typename Predecessor>
+  auto operator()(Predecessor&& s) const ->
+      typename sender<remove_cvref_t<Predecessor>>::type {
+    return {(Predecessor &&) s};
   }
-  template <typename Transform>
-  constexpr auto operator()(Transform&& trns) const
-      noexcept(is_nothrow_callable_v<tag_t<bind_back>, then_fn, Transform>)
-          -> bind_back_result_t<then_fn, Transform> {
-    return bind_back(*this, (Transform &&) trns);
+  constexpr auto operator()() const
+      noexcept(is_nothrow_callable_v<tag_t<bind_back>, via_fn>)
+          -> bind_back_result_t<via_fn> {
+    return bind_back(*this);
   }
-} then_each;
-template <typename SenderFactory, typename Transform>
-struct then_fn::state {
+} via_each;
+template <typename SenderFactory, typename Scheduler>
+struct via_fn::state {
+  ~state() {  //
+    [[maybe_unused]] auto sf = std::move(sf_);
+    [[maybe_unused]] auto sched = std::move(sched_);
+  }
   SenderFactory sf_;
-  Transform trns_;
+  Scheduler sched_;
 };
 template <
     typename Predecessor,
     typename SuccessorReceiver,
     typename SenderFactory,
-    typename Transform>
-struct then_fn::op<Predecessor, SuccessorReceiver, SenderFactory, Transform>::
+    typename Scheduler>
+struct via_fn::op<Predecessor, SuccessorReceiver, SenderFactory, Scheduler>::
     type {
-  using state_t = state<SenderFactory, Transform>;
-  struct then_each {
-    ~then_each() { state_ = nullptr; }
+  using state_t =
+      state<remove_cvref_t<SenderFactory>, remove_cvref_t<Scheduler>>;
+  struct via_each {
+    ~via_each() {  //
+      state_ = nullptr;
+    }
     template <typename ItemSender>
     auto operator()(ItemSender&& itemSender) {
-      return state_->sf_(
-          (ItemSender &&) itemSender | unifex::then(state_->trns_));
+      return state_->sf_(via(state_->sched_, (ItemSender &&) itemSender));
     }
     state_t* state_;
   };
   // state breaks the type recursion that causes op to be an incomplete type
-  // when discard_ is accessed by then_each
+  // when discard_ is accessed by via_each
   using pred_op_t =
-      sequence_connect_result_t<Predecessor, SuccessorReceiver, then_each>;
+      sequence_connect_result_t<Predecessor, SuccessorReceiver, via_each>;
   state_t state_;
   pred_op_t predOp_;
-
+  type(const type&) = delete;
+  type(type&&) = delete;
   template <
       typename Predecessor2,
       typename SuccessorReceiver2,
       typename SenderFactory2,
-      typename Transform2>
+      typename Scheduler2>
   type(
       Predecessor2&& predecessor,
       SuccessorReceiver2&& successorReceiver,
       SenderFactory2&& sf,
-      Transform2&& trns)
-    : state_({(SenderFactory2 &&) sf, (Transform2 &&) trns})
-    , predOp_(sequence_connect(
+      Scheduler2&& sched)
+    : state_({(SenderFactory2 &&) sf, (Scheduler2 &&) sched})
+    , predOp_(unifex::sequence_connect(
           (Predecessor2 &&) predecessor,
           (SuccessorReceiver2 &&) successorReceiver,
-          then_each{&state_})) {}
+          via_each{&state_})) {}
 
   friend auto tag_invoke(unifex::tag_t<unifex::start>, type& self) noexcept {
     return unifex::start(self.predOp_);
   }
 };
-template <typename Predecessor, typename Transform>
-struct then_fn::sender<Predecessor, Transform>::type {
+template <typename Predecessor>
+struct via_fn::sender<Predecessor>::type {
   Predecessor predecessor_;
-  Transform trns_;
-
-  // This helper transforms an argument list into either
-  // - type_list<type_list<Result>> - if Result is non-void, or
-  // - type_list<type_list<>>       - if Result is void
-  template <typename... Args>
-  using result = type_list<typename detail::result_overload<
-      callable_result_t<Transform, Args...>>::type>;
 
   template <
       template <typename...>
       class Variant,
       template <typename...>
       class Tuple>
-  using value_types = type_list_nested_apply_t<
-      sender_value_types_t<Predecessor, concat_type_lists_unique_t, result>,
-      Variant,
-      Tuple>;
+  using value_types = sender_value_types_t<Predecessor, Variant, Tuple>;
 
   template <template <typename...> class Variant>
   using error_types = typename concat_type_lists_unique_t<
@@ -156,8 +131,20 @@ struct then_fn::sender<Predecessor, Transform>::type {
 
   static constexpr bool sends_done = sender_traits<Predecessor>::sends_done;
 
+  template <typename Sender, typename Scheduler>
+  static auto pipeVia(Sender&& s, Scheduler&& sched) {
+    return via(sched, (Sender &&) s);
+  }
+  template <typename Sender, typename Scheduler>
+  using via_sender_t =
+      decltype(pipeVia(std::declval<Sender>(), std::declval<Scheduler>()));
+
   template <typename Sender, typename Receiver, typename SenderFactory>
-  using op_t = typename op<Sender, Receiver, SenderFactory, Transform>::type;
+  using op_t = typename op<
+      via_sender_t<Sender, get_scheduler_result_t<Receiver>>,
+      Receiver,
+      SenderFactory,
+      get_scheduler_result_t<Receiver>>::type;
 
   template(typename T, typename Receiver, typename SenderFactory)     //
       (requires                                                       //
@@ -171,18 +158,21 @@ struct then_fn::sender<Predecessor, Transform>::type {
       noexcept(
           is_nothrow_callable_v<
               tag_t<unifex::sequence_connect>,
-              member_t<T, Predecessor>,
+              via_sender_t<
+                  member_t<T, Predecessor>,
+                  get_scheduler_result_t<Receiver>>,
               Receiver,
               typename op_t<member_t<T, Predecessor>, Receiver, SenderFactory>::
-                  then_each>) {
-    return {
-        static_cast<T&&>(self).predecessor_,
+                  via_each>) {
+    auto sched = get_scheduler(receiver);
+    return op_t<member_t<T, Predecessor>, Receiver, SenderFactory>(
+        via(sched, static_cast<T&&>(self).predecessor_),
         (Receiver &&) receiver,
         (SenderFactory &&) sf,
-        static_cast<T&&>(self).trns_};
+        sched);
   }
 };
-}  // namespace _thn_cpo
-using _thn_cpo::then_each;
+}  // namespace _via_cpo
+using _via_cpo::via_each;
 }  // namespace unifex
 #include <unifex/detail/epilogue.hpp>

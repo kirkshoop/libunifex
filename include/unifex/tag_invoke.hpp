@@ -27,11 +27,19 @@ namespace unifex {
 namespace _tag_invoke {
 void tag_invoke();
 
+// constexpr_value_of<T>() is a complete hack that threads the language rules
+// to get a compile-time constant of a value with unknown constructors
+// - std::declval<T>() was not working, this does
+//
+// WARNING: completely UB to reference the value, it is not constructed
 template <typename T>
 union _u {
+  // need to specify destructor and constructor to do nothing
   ~_u() noexcept {}
   constexpr _u() : i_(0) {}
+  // need a type that can be constructed at compile time
   int i_;
+  // specify the type that may not be constructible
   std::remove_reference_t<T> t_;
 };
 template <typename T>
@@ -42,6 +50,9 @@ constexpr auto& constexpr_value_of() {
   return u_<T>.t_;
 }
 
+// constexpr_value<T> allows a tag_invoke customization to support constexpr
+// invocation constexpr auto tag_invoke(constexpr_value<CPO>,
+// constexpr_value<const Target&>) {..}
 template <typename T>
 struct _constexpr_value {
   using type = T;

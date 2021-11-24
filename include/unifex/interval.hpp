@@ -113,31 +113,34 @@ struct interval_fn::factory_op<Clock, FinalReceiver, SenderFactory, Receiver>::
   type& operator=(const type&) = delete;
   type& operator=(type&&) = delete;
 
-  friend variant_tail_sender<
+  using result_t = variant_tail_sender<
       callable_result_t<tag_t<unifex::set_value>, Receiver, const time_point&>,
       callable_result_t<tag_t<unifex::set_done>, Receiver>,
       callable_result_t<
           tag_t<unifex::set_error>,
           FinalReceiver,
-          std::exception_ptr>>
+          std::exception_ptr>>;
+
+  friend result_t
   tag_invoke(unifex::tag_t<unifex::start>, type& self) noexcept {
     UNIFEX_TRY {
-      return {
+      return result_or_null_tail_sender(
           unifex::set_value,
           std::move(self.receiver_),
-          std::as_const(self.expected_)};
+          std::as_const(self.expected_));
       // self is considered destructed
     }
     UNIFEX_CATCH(...) {
       auto op = self.op_;
-      return {unifex::set_done, std::move(self.receiver_)};
+      return result_or_null_tail_sender(
+          unifex::set_done, std::move(self.receiver_));
       // self is considered destructed
 
       // end sequence with the error
-      return {
+      return result_or_null_tail_sender(
           unifex::set_error,
           std::move(op->receiver_),
-          std::current_exception()};
+          std::current_exception());
     }
   }
 };
@@ -152,7 +155,8 @@ struct interval_fn::op<Clock, Receiver, SenderFactory>::tail_start {
     }
     void unwind() noexcept {
       auto op = op_;
-      resume_tail_sender(unifex::set_done, std::move(op->receiver_));
+      result_or_null_tail_sender(unifex::set_done, std::move(op->receiver_))
+          .unwind();
     }
     op_t* op_;
   };
@@ -191,7 +195,8 @@ struct interval_fn::op<Clock, Receiver, SenderFactory>::tail_restart {
     }
     void unwind() noexcept {
       auto op = op_;
-      resume_tail_sender(unifex::set_done, std::move(op->receiver_));
+      result_or_null_tail_sender(unifex::set_done, std::move(op->receiver_))
+          .unwind();
     }
     op_t* op_;
   };
