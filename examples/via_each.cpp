@@ -89,6 +89,7 @@ int main() {
                   unifex::then([&](const int& count, const auto& tpl) {
                        int thisCount = count + 1;
                        auto& [id, actual, intended] = tpl;
+                       auto now = std::chrono::steady_clock::now();
                        auto delta =
                            std::chrono::duration_cast<
                                std::chrono::duration<float, std::milli>>(
@@ -99,13 +100,25 @@ int main() {
                                std::chrono::duration<float, std::milli>>(
                                actual - first)
                                .count();
+                       auto nowdelta =
+                           std::chrono::duration_cast<
+                               std::chrono::duration<float, std::milli>>(
+                               now - intended)
+                               .count();
+                       auto nowmillis =
+                           std::chrono::duration_cast<
+                               std::chrono::duration<float, std::milli>>(
+                               now - first)
+                               .count();
                        printf(
-                           "[%d] delta is %.4fms at sample %3d, %3.4fms"
-                           " after initial tick\n",
+                           "[%d] delta is %.4fms(%.4fms now) at sample %3d, "
+                           "%3.4fms(%3.4fms now) after initial tick\n",
                            id,
                            delta,
+                           nowdelta,
                            thisCount,
-                           millis);
+                           millis,
+                           nowmillis);
                        fflush(stdout);
                        return thisCount;
                      });
