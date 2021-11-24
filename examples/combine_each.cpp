@@ -112,8 +112,14 @@ int main() {
                                now - first)
                                .count();
                        printf(
-                           "[%d] delta is %.4fms(%.4fms now) at sample %3d, "
-                           "%3.4fms(%3.4fms now) after initial tick\n",
+                           "[%s][%d] delta is %.4fms(%.4fms now) at sample "
+                           "%3d, %3.4fms(%3.4fms now) after initial tick\n",
+                           std::this_thread::get_id() == time[0].get_thread_id()
+                               ? "0"
+                               : std::this_thread::get_id() ==
+                                   time[1].get_thread_id()
+                               ? "1"
+                               : "?",
                            id,
                            delta,
                            nowdelta,
