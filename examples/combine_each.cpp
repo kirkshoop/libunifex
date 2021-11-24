@@ -16,12 +16,12 @@
 #include <unifex/combine_each.hpp>
 #include <unifex/filter_each.hpp>
 #include <unifex/interval.hpp>
+#include <unifex/let_done.hpp>
 #include <unifex/reduce_each.hpp>
 #include <unifex/scheduler_concepts.hpp>
 #include <unifex/sequence_concepts.hpp>
 #include <unifex/stop_when.hpp>
 #include <unifex/sync_wait.hpp>
-#include <unifex/then.hpp>
 #include <unifex/then_each.hpp>
 #include <unifex/timed_single_thread_context.hpp>
 #include <unifex/with_query_value.hpp>
@@ -62,25 +62,25 @@ int main() {
         // send intervals (first, first + gap, etc..)
         unifex::combine_each(
             unifex::interval(first, gap[0]) |  //
-                then_each(
-                    [](auto expected) { return std::make_tuple(0, expected); }),
+                then_each([](auto expected) {
+                  return std::make_tuple(
+                      0, std::chrono::steady_clock::now(), expected);
+                }),
             unifex::interval(first, gap[1]) |  //
                 then_each([](auto expected) {
-                  return std::make_tuple(1, expected);
+                  return std::make_tuple(
+                      1, std::chrono::steady_clock::now(), expected);
                 }) |
                 // use a different thread for this interval
                 with_query_value(
                     unifex::get_scheduler, time[1].get_scheduler())) |  //
         // only sample 1 tick out of the expected, ignore the rest
         filter_each([&](const auto& v) {
-          const auto& [id, tick] = v;
-          return (tick - first) % expected < gap[0];
+          const auto& [id, actual, intended] = v;
+          return (intended - first) % expected < gap[0];
         }) |
-        // include actual time of event
-        then_each([](auto v) {
-          auto& [id, tick] = v;
-          return std::make_tuple(id, std::chrono::steady_clock::now(), tick);
-        }) |
+        // complete with the accumulated count after cancellation
+        unifex::let_done([]() noexcept { return just(); }) |
         // log ticks that arrive and accumulate a count of the ticks that
         // arrived
         reduce_each(
@@ -90,6 +90,7 @@ int main() {
                   unifex::then([&](counter count, [[maybe_unused]] auto tpl) {
                        int thisCount = count.inc();
                        auto& [id, actual, intended] = tpl;
+                       auto now = std::chrono::steady_clock::now();
                        auto delta =
                            std::chrono::duration_cast<
                                std::chrono::duration<float, std::milli>>(
@@ -100,13 +101,26 @@ int main() {
                                std::chrono::duration<float, std::milli>>(
                                actual - first)
                                .count();
+                       auto nowdelta =
+                           std::chrono::duration_cast<
+                               std::chrono::duration<float, std::milli>>(
+                               now - intended)
+                               .count();
+                       auto nowmillis =
+                           std::chrono::duration_cast<
+                               std::chrono::duration<float, std::milli>>(
+                               now - first)
+                               .count();
                        printf(
-                           "[%d] delta is %.4fms at sample %3d, %3.4fms after "
-                           "initial tick\n",
+                           "[%d] delta is %.4fms(%.4fms now) at sample %3d, "
+                           "%3.4fms(%3.4fms now) after initial tick\n",
                            id,
                            delta,
+                           nowdelta,
                            thisCount,
-                           millis);
+                           millis,
+                           nowmillis);
+                       fflush(stdout);
                        return count;
                      });
             }) |  //
