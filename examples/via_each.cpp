@@ -54,34 +54,35 @@ int main() {
     auto first = start + initial;
 
     auto tickCount = unifex::sync_wait(
-        // send intervals (first, first + gap, etc..)
         unifex::combine_each(
+            // send intervals (first, first + gap, etc..)
             unifex::interval(first, gap[0]) |  //
-                then_each([](auto expected) {
+                unifex::then_each([](auto expected) {
                   return std::make_tuple(
                       0, std::chrono::steady_clock::now(), expected);
                 }),
+            // send intervals (first, first + gap, etc..)
             unifex::interval(
                 first, gap[1]) |  //
                                   // use a different thread for this interval
-                with_query_value(
+                unifex::with_query_value(
                     unifex::get_scheduler, time[1].get_scheduler()) |
-                then_each([](const auto& expected) {
+                unifex::then_each([](const auto& expected) {
                   return std::make_tuple(
                       1, std::chrono::steady_clock::now(), expected);
                 })) |  //
         // only sample 1 tick out of the expected, ignore the rest
-        filter_each([&](const auto& v) {
+        unifex::filter_each([&](const auto& v) {
           const auto& [id, actual, intended] = v;
           return (intended - first) % expected < gap[0];
         }) |
         // resolve races by rescheduling all filtered items on a single thread
-        via_each() |
+        unifex::via_each() |
         // complete with the accumulated count after cancellation
-        let_done([]() noexcept { return just(); }) |
+        unifex::let_done([]() noexcept { return just(); }) |
         // log samples that arrive and accumulate a count of the samples that
         // arrived
-        reduce_each(
+        unifex::reduce_each(
             0,
             [&](const auto& itemSender) {
               return itemSender |  //
@@ -115,7 +116,8 @@ int main() {
             then([] { printf("stop\n"); })) |
         // use this scheduler implicitly (first interval and the stop_when
         // trigger)
-        with_query_value(unifex::get_scheduler, time[0].get_scheduler()));
+        unifex::with_query_value(
+            unifex::get_scheduler, time[0].get_scheduler()));
     auto millis =
         std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(
             std::chrono::steady_clock::now() - start)
