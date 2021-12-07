@@ -284,22 +284,6 @@ auto _resolve_result(Result& result, One one) noexcept {
   }
 };
 
-template(typename Receiver)      //
-    (requires                    //
-     (tail_receiver<Receiver>))  //
-    inline null_tail_sender
-    resume_tail_senders_until_one_remaining(Receiver) noexcept {
-  return {};
-}
-
-template(typename Receiver, typename C)  //
-    (requires                            //
-     (tail_receiver<Receiver>) AND       //
-     (_tail_sender<C>))                  //
-    C resume_tail_senders_until_one_remaining(Receiver, C c) noexcept {
-  return c;
-}
-
 template(typename... Cs, std::size_t... Is, typename Receiver)  //
     (requires                                                   //
      (tail_receiver<Receiver>) AND                              //
@@ -332,24 +316,46 @@ template(typename... Cs, std::size_t... Is, typename Receiver)  //
   }
 }
 
-template(typename Receiver, typename... Cs)        //
-    (requires                                      //
-     (tail_receiver<Receiver>) AND                 //
-     (all_true<tail_sender_to<Cs, Receiver>...>))  //
-    auto resume_tail_senders_until_one_remaining(
-        Receiver r, Cs... cs) noexcept {
-  return _resume_tail_senders_until_one_remaining(
-      std::index_sequence_for<Cs...>{}, r, cs...);
-}
-template(typename C0, typename... Cs)                  //
-    (requires                                          //
-     (!tail_receiver<C0>) AND                          //
-     (all_true<tail_sender<C0>, tail_sender<Cs>...>))  //
-    [[nodiscard]] auto resume_tail_senders_until_one_remaining(
-        C0 c0, Cs... cs) noexcept {
-  return _resume_tail_senders_until_one_remaining(
-      std::index_sequence_for<C0, Cs...>{}, null_tail_receiver{}, c0, cs...);
-}
+struct _resume_tail_senders_until_one_remaining_fn {
+  template(typename Receiver)      //
+      (requires                    //
+       (tail_receiver<Receiver>))  //
+      inline null_tail_sender
+      operator()(Receiver) const noexcept {
+    return {};
+  }
+
+  template(typename Receiver, typename C)  //
+      (requires                            //
+       (tail_receiver<Receiver>) AND       //
+       (_tail_sender<C>))                  //
+      C
+      operator()(Receiver, C c) const noexcept {
+    return c;
+  }
+
+  template(typename Receiver, typename... Cs)        //
+      (requires                                      //
+       (tail_receiver<Receiver>) AND                 //
+       (all_true<tail_sender_to<Cs, Receiver>...>))  //
+      auto
+      operator()(Receiver r, Cs... cs) const noexcept {
+    return _resume_tail_senders_until_one_remaining(
+        std::index_sequence_for<Cs...>{}, r, cs...);
+  }
+
+  template(typename C0, typename... Cs)                  //
+      (requires                                          //
+       (!tail_receiver<C0>) AND                          //
+       (all_true<tail_sender<C0>, tail_sender<Cs>...>))  //
+      [[nodiscard]] auto
+      operator()(C0 c0, Cs... cs) const noexcept {
+    return _resume_tail_senders_until_one_remaining(
+        std::index_sequence_for<C0, Cs...>{}, null_tail_receiver{}, c0, cs...);
+  }
+};
+inline constexpr _resume_tail_senders_until_one_remaining_fn
+    resume_tail_senders_until_one_remaining{};
 }  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>
