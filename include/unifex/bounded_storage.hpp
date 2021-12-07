@@ -154,6 +154,8 @@ struct bounded_storage {
             pending* expected = stg_->pending_.load();
             this->next_ = expected;
             while (!stg_->pending_.compare_exchange_strong(expected, this)) {
+              std::this_thread::yield();
+              expected = stg_->pending_.load();
               this->next_ = expected;
             }
             return null_tail_sender{};
@@ -207,6 +209,8 @@ struct bounded_storage {
           while (!!consume &&
                  !stg_->pending_.compare_exchange_strong(
                      consume, consume->next_)) {
+            std::this_thread::yield();
+            consume = stg_->pending_.load();
           }
           // switch storage slot to new op or release the slot for a later
           // construct()
