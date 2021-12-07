@@ -50,6 +50,7 @@ private:
   template(typename OtherCPO, typename Self, typename... Args)  //
       (requires                                                 //
        (same_as<remove_cvref_t<Self>, type>) AND                //
+       (!same_as<OtherCPO, CPO>) AND                            //
        (callable<
            OtherCPO,
            member_t<Self, Receiver>,
