@@ -40,7 +40,7 @@ namespace unifex {
 namespace _cmb_cpo {
 inline constexpr struct combine_fn {
   template <typename Receiver, typename Errors>
-  struct succ_rcvr {
+  struct seq_rcvr {
     struct type;
   };
   template <typename Receiver, typename Errors>
@@ -63,7 +63,7 @@ inline constexpr struct combine_fn {
   }
 } combine_each;
 template <typename Receiver, typename Errors>
-struct combine_fn::succ_rcvr<Receiver, Errors>::type {
+struct combine_fn::seq_rcvr<Receiver, Errors>::type {
   using result_t = variant_tail_sender<
       callable_result_t<
           unifex::tag_t<unifex::set_error>,
@@ -186,9 +186,9 @@ template <
     typename Errors,
     typename... SeqN>
 struct combine_fn::op<Receiver, SenderFactory, Errors, SeqN...>::type {
-  using succ_rcvr_t = typename succ_rcvr<Receiver, Errors>::type;
-  using op_t = std::tuple<
-      sequence_connect_result_t<SeqN, succ_rcvr_t, SenderFactory>...>;
+  using seq_rcvr_t = typename seq_rcvr<Receiver, Errors>::type;
+  using op_t =
+      std::tuple<sequence_connect_result_t<SeqN, seq_rcvr_t, SenderFactory>...>;
   state<Receiver, Errors> st_;
   op_t opn_;
 
@@ -206,7 +206,7 @@ struct combine_fn::op<Receiver, SenderFactory, Errors, SeqN...>::type {
     , opn_(packaged_callable(
           sequence_connect,
           std::get<Idx>((SeqN2 &&) seqn),
-          succ_rcvr_t{&st_},
+          seq_rcvr_t{&st_},
           (SenderFactory2 &&) sf)...) {}
 
   friend auto tag_invoke(unifex::tag_t<unifex::start>, type& self) noexcept {
@@ -250,7 +250,7 @@ struct combine_fn::sender<SeqN...>::type {
           (is_nothrow_callable_v<
                tag_t<unifex::sequence_connect>,
                member_t<T, SeqN>,
-               typename succ_rcvr<Receiver, error_types<std::variant>>::type,
+               typename seq_rcvr<Receiver, error_types<std::variant>>::type,
                SenderFactory> &&
            ...)) {
     return op_t<Receiver, SenderFactory>(
