@@ -155,6 +155,63 @@ inline constexpr auto tag_invoke_v = _tag_invoke::_v<CPO, Target, As...>;
 template <typename Fn>
 using meta_tag_invoke_result =
     meta_quote1_<tag_invoke_result_t>::bind_front<Fn>;
+
+// tag_invoke_member is a CPO customized by other CPOs to define named object
+// methods
+namespace _tag_invoke_member {
+struct _fn {
+  template <typename CPO, typename Target, typename... ArgN>
+  constexpr auto operator()(CPO, Target&& t, ArgN&&... argn) const {
+    return tag_invoke(*this, CPO{}, (Target &&) t, (ArgN &&) argn...);
+  }
+};
+inline constexpr _fn tag_invoke_member{};
+}  // namespace _tag_invoke_member
+using _tag_invoke_member::tag_invoke_member;
+
+// implement tag_invoke to tag_invoke_member for Derived
+//
+template <typename Derived, typename Cpo>
+struct _tag_invoke_member_base {
+  template(typename Target, typename... ArgN)                                //
+      (requires std::is_base_of_v<Derived, unifex::remove_cvref_t<Target>>)  //
+      friend constexpr auto tag_invoke(
+          Cpo,
+          Target&& t,
+          ArgN&&... argn)  //
+      noexcept(            //
+          unifex::is_nothrow_tag_invocable_v<
+              unifex::tag_t<tag_invoke_member>,
+              Cpo,
+              Target,
+              ArgN...>)
+          -> unifex::tag_invoke_result_t<
+              unifex::tag_t<tag_invoke_member>,
+              Cpo,
+              Target,
+              ArgN...> {
+    return tag_invoke_member(Cpo{}, (Target &&) t, (ArgN &&) argn...);
+  }
+};
+
+template <typename Derived, typename... CpoN>
+struct tag_invoke_member_base {
+  struct type : _tag_invoke_member_base<Derived, CpoN>... {};
+};
+
+// struct D : tag_invoke_member_base_t<D, CpoN...> {..}; will
+// create a tag_invoke customization for each CPO that will forward to
+// tag_invoke_member()
+// CPOs customize tag_invoke_member to call a named member of Target.
+// this allows
+// struct asender : tag_invoke_member_base_t<asender, tag_t<connect>> {
+//   template<typename R>
+//   op connect(R) {..} // this customizes the connect CPO
+// };
+template <typename Derived, typename... CpoN>
+using tag_invoke_member_base_t =
+    typename tag_invoke_member_base<Derived, CpoN...>::type;
+
 }  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

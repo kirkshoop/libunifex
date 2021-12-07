@@ -61,6 +61,16 @@ inline const struct _fn {
     return blocking_kind::maybe;
   }
 } blocking{};
+
+template <typename Target>
+constexpr auto tag_invoke(
+    const unifex::tag_t<tag_invoke_member>&,
+    const _fn&,
+    const Target& t) noexcept(noexcept(t.blocking()))
+    -> decltype(t.blocking()) {
+  return t.blocking();
+}
+
 }  // namespace _blocking
 using _blocking::blocking;
 
