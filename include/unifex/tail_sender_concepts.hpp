@@ -125,17 +125,14 @@ UNIFEX_CONCEPT _tail_receiver =
 struct null_tail_sender;
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(                                             //
-    _tail_sender_to_impl,                                            //
-    requires(T c, Receiver r)                                        //
-        (c.sends_done,                                               //
-         unifex::connect(c, r)) &&                                   //
-        (unifex::is_nothrow_connectable_v<T, Receiver>)&&            //
-        (_tail_operation<connect_result_t<T, Receiver>>)&&           //
-        (tail_sender_or_void<next_tail_sender_to_t<T, Receiver>>)&&  //
-        (same_as<                                                    //
-            unifex::sender_single_value_return_type_t<T>,            //
-            void>));
+UNIFEX_CONCEPT_FRAGMENT(                                    //
+    _tail_sender_to_impl,                                   //
+    requires(T c, Receiver r)                               //
+        (c.sends_done,                                      //
+         unifex::connect(c, r)) &&                          //
+        (unifex::is_nothrow_connectable_v<T, Receiver>)&&   //
+        (_tail_operation<connect_result_t<T, Receiver>>)&&  //
+        (tail_sender_or_void<next_tail_sender_to_t<T, Receiver>>));
 
 template <typename T, typename Receiver>
 UNIFEX_CONCEPT _tail_sender_to =   //
@@ -569,27 +566,17 @@ struct _op<Sender, Receiver>::type : tail_operation_state_base {
   using rec_t = typename _rcvr<Sender, Receiver>::type;
   using op_t = connect_result_t<Sender, rec_t>;
   template <typename Sender2, typename Receiver2>
-  type(Sender2 s, Receiver2 r) noexcept
-    : r_(r)
-    , op_(unifex::connect(s, rec_t{&r_})) {}
+  type(Sender2&& s, Receiver2&& r) noexcept
+    : r_((Receiver2 &&) r)
+    , op_(unifex::connect((Sender2 &&) s, rec_t{&r_})) {}
   Receiver r_;
   op_t op_;
-  template(typename... As)    //
-      (requires               //
-       (sizeof...(As) == 0))  //
-      void unwind(As...) noexcept {
+  void unwind() noexcept {
     if constexpr (tail_operation<op_t>) {
       op_.unwind();
-    } else {
-      unifex::set_done(std::move(r_));
     }
   }
-  template(typename... As)    //
-      (requires               //
-       (sizeof...(As) == 0))  //
-      auto start(As&&...) noexcept {
-    return unifex::start(op_);
-  }
+  auto start() noexcept { return unifex::start(op_); }
 };
 
 template <typename Sender>
@@ -599,12 +586,13 @@ struct _sender {
     template(typename Receiver)        //
         (requires                      //
          (tail_receiver<Receiver>) &&  //
-         (is_nothrow_callable_v<
-             unifex::tag_t<unifex::connect>,
+         (sender_to<
              Sender,
-             typename _rcvr<Sender, Receiver>::type>))  //
-        typename _op<Sender, Receiver>::type connect(Receiver r) noexcept {
-      return {s_, r};
+             typename _rcvr<remove_cvref_t<Sender>, remove_cvref_t<Receiver>>::
+                 type>))  //
+        typename _op<remove_cvref_t<Sender>, remove_cvref_t<Receiver>>::type
+        connect(Receiver&& r) noexcept {
+      return {s_, (Receiver &&) r};
     }
     friend constexpr blocking_kind tag_invoke(
         constexpr_value<tag_t<blocking>>,
@@ -633,9 +621,10 @@ struct _fn {
     return {{}, s};
   }
 };
+inline constexpr auto as_tail_sender = _as_tail::_fn{};
 }  // namespace _as_tail
 
-inline constexpr auto as_tail_sender = _as_tail::_fn{};
+using _as_tail::as_tail_sender;
 }  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>
