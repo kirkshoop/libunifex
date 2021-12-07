@@ -208,15 +208,15 @@ struct bounded_storage {
                  !stg_->pending_.compare_exchange_strong(
                      consume, consume->next_)) {
           }
-          stg_->storage_[exp_.idx_].op_.destruct();
           // switch storage slot to new op or release the slot for a later
           // construct()
+          stg_->storage_[exp_.idx_].op_.destruct();
           stg_->storage_[exp_.idx_].current_.exchange(consume);
           // start pending item
           if (!!consume) {
             consume->start_(consume->op_, exp_.idx_);
           }
-          // complete destruct op
+          // complete op
           return unifex::set_value(std::move(r_));
         }
       };
