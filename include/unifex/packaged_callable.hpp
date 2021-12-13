@@ -29,16 +29,17 @@
 namespace unifex {
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(    //
-    _callable_package_exp,  //
-    requires(T t)           //
-    (static_cast<typename T::value_type>(t),
-     static_cast<typename T::value_type>(std::move(t)),
-     t(),
-     std::move(t)()));
+UNIFEX_CONCEPT_FRAGMENT(
+    _callable_package_exp,
+    requires(T t)(
+        static_cast<typename T::value_type>(t),
+        static_cast<typename T::value_type>(std::move(t)),
+        t(),
+        std::move(t)()));
 
 template <typename T>
-UNIFEX_CONCEPT callable_package =                //
+UNIFEX_CONCEPT
+callable_package =                               //
     (std::is_nothrow_move_constructible_v<T>)&&  //
     (std::is_nothrow_move_assignable_v<T>)&&     //
     UNIFEX_FRAGMENT(_callable_package_exp, T);   //

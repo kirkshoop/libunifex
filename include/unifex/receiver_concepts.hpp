@@ -190,10 +190,9 @@ using is_receiver_cpo = std::bool_constant<is_receiver_cpo_v<T>>;
 #if UNIFEX_CXX_CONCEPTS
 // Defined the receiver concepts without the macros for improved diagnostics
 template <typename R, typename E = std::exception_ptr>
-concept         //
-    receiver =  //
-    move_constructible<remove_cvref_t<R>> &&
-    constructible_from<remove_cvref_t<R>, R> &&
+concept receiver =                               //
+    move_constructible<remove_cvref_t<R>> &&     //
+    constructible_from<remove_cvref_t<R>, R> &&  //
     requires(remove_cvref_t<R>&& r, E&& e) {
   { set_done(std::move(r)) }
   noexcept;
@@ -202,10 +201,9 @@ concept         //
 };
 
 template <typename R, typename... An>
-concept                                                         //
-    receiver_of =                                               //
-    receiver<R> && requires(remove_cvref_t<R>&& r, An&&... an)  //
-{
+concept receiver_of =  //
+    receiver<R> &&     //
+    requires(remove_cvref_t<R>&& r, An&&... an) {
   set_value(std::move(r), (An &&) an...);
 };
 #else
@@ -217,8 +215,8 @@ UNIFEX_CONCEPT_FRAGMENT(
      noexcept(set_error(std::move(r), (E &&) e))));
 
 template <typename R, typename E = std::exception_ptr>
-UNIFEX_CONCEPT                                 //
-    receiver =                                 //
+UNIFEX_CONCEPT
+receiver =                                     //
     (move_constructible<remove_cvref_t<R>>)&&  //
     (constructible_from<
         remove_cvref_t<R>,
@@ -226,16 +224,15 @@ UNIFEX_CONCEPT                                 //
     UNIFEX_FRAGMENT(unifex::_receiver, R, E);
 
 template <typename T, typename... An>
-UNIFEX_CONCEPT_FRAGMENT(                         //
-    _receiver_of,                                //
+UNIFEX_CONCEPT_FRAGMENT(
+    _receiver_of,
     requires(remove_cvref_t<T>&& t, An&&... an)  //
     (set_value(std::move(t), (An &&) an...)));
 
 template <typename R, typename... An>
-UNIFEX_CONCEPT     //
-    receiver_of =  //
-    receiver<R>&&
-    UNIFEX_FRAGMENT(unifex::_receiver_of, R, An...);
+UNIFEX_CONCEPT
+receiver_of =  //
+    receiver<R> && UNIFEX_FRAGMENT(unifex::_receiver_of, R, An...);
 #endif
 
 template <typename R, typename... An>

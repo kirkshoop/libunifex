@@ -34,7 +34,7 @@
 
 namespace unifex {
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 // Tail Callable Concepts
 
 template <typename T>
@@ -42,133 +42,131 @@ using next_tail_operation_t =
     unifex::callable_result_t<unifex::tag_t<unifex::start>, T&>;
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(                                        //
-    _tail_operation_impl,                                       //
-    requires(T& c)                                              //
-        (c.unwind(),                                            //
-         unifex::start(c)) &&                                   //
-        noexcept(std::declval<T>().unwind()) &&                 //
-        same_as<decltype(std::declval<T>().unwind()), void> &&  //
+UNIFEX_CONCEPT_FRAGMENT(
+    _tail_operation_impl,
+    requires(T& c)(c.unwind(), unifex::start(c)) && noexcept(
+        std::declval<T>().unwind()) &&
+        same_as<decltype(std::declval<T>().unwind()), void> &&
         unifex::is_nothrow_callable_v<unifex::tag_t<unifex::start>, T&>);
 
 template <typename T>
-UNIFEX_CONCEPT _tail_operation =                  //
-    (                                             //
-        (!std::is_copy_constructible_v<T>)&&      //
-        (!std::is_move_constructible_v<T>)&&      //
-        (!std::is_copy_assignable_v<T>)&&         //
-        (!std::is_move_assignable_v<T>)&&         //
-        (std::is_nothrow_destructible_v<T>)&&     //
-        (std::is_trivially_destructible_v<T>)&&   //
-        UNIFEX_FRAGMENT(_tail_operation_impl, T)  //
-    );
+UNIFEX_CONCEPT
+_tail_operation =
+    ((!std::is_copy_constructible_v<T>)&&                                   //
+     (!std::is_move_constructible_v<T>)&&(!std::is_copy_assignable_v<T>)&&  //
+     (!std::is_move_assignable_v<T>)&&                                      //
+     (std::is_nothrow_destructible_v<T>)&&                                  //
+     (std::is_trivially_destructible_v<T>)&&                                //
+     UNIFEX_FRAGMENT(_tail_operation_impl, T));
 
 template <typename T, typename Receiver>
 using next_tail_sender_to_t =
     next_tail_operation_t<unifex::connect_result_t<T, Receiver>>;
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(                           //
-    _tail_sender_traits,                           //
-    requires(const T& t)                           //
-        (t.sends_done) &&                          //
-        (unifex::blocking_v<T> ==                  //
-         unifex::blocking_kind::always_inline) &&  //
+UNIFEX_CONCEPT_FRAGMENT(
+    _tail_sender_traits,
+    requires(const T& t)(t.sends_done) &&
+        (unifex::blocking_v<T> == unifex::blocking_kind::always_inline) &&
         same_as<unifex::sender_single_value_return_type_t<T>, void>);
 
 template <typename T>
-UNIFEX_CONCEPT _tail_sender =                   //
-    (                                           //
-        /* unifex::is_sender_nofail_v<T> && */  // just() doesn't know it is
-                                                // nofail until a receiver is
-                                                // connected..
-        (std::is_nothrow_move_constructible_v<T>)&&  //
-        (std::is_nothrow_destructible_v<T>)&&        //
-        (std::is_trivially_destructible_v<T>)&&      //
-        UNIFEX_FRAGMENT(unifex::_tail_sender_traits, T));
+UNIFEX_CONCEPT
+_tail_sender = (
+    /* unifex::is_sender_nofail_v<T> && */       // just() doesn't know it is
+                                                 // nofail until a receiver is
+                                                 // connected..
+    (std::is_nothrow_move_constructible_v<T>)&&  //
+    (std::is_nothrow_destructible_v<T>)&&        //
+    (std::is_trivially_destructible_v<T>)&&      //
+    UNIFEX_FRAGMENT(unifex::_tail_sender_traits, T));
 
 template <typename T>
-UNIFEX_CONCEPT tail_sender_or_void = same_as<T, void> || _tail_sender<T>;
+UNIFEX_CONCEPT
+tail_sender_or_void = same_as<T, void> || _tail_sender<T>;
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(             //
-    _terminal_tail_operation_start,  //
-    requires(T& c)                   //
-        (unifex::start(c)) &&        //
+UNIFEX_CONCEPT_FRAGMENT(
+    _terminal_tail_operation_start,
+    requires(T& c)(unifex::start(c)) &&
         (same_as<decltype(unifex::start(std::declval<T&>())), void>));
 
 template <typename T>
-UNIFEX_CONCEPT _terminal_tail_operation =  //
-    (_tail_operation<T>)&&                 //
+UNIFEX_CONCEPT
+_terminal_tail_operation = (_tail_operation<T>)&&  //
     UNIFEX_FRAGMENT(unifex::_terminal_tail_operation_start, T);
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(                    //
-    _terminal_tail_sender_operation_start,  //
-    requires(T c, Receiver r)               //
-        (unifex::connect(c, r)) &&          //
+UNIFEX_CONCEPT_FRAGMENT(
+    _terminal_tail_sender_operation_start,
+    requires(T c, Receiver r)(unifex::connect(c, r)) &&
         (_terminal_tail_operation<connect_result_t<T, Receiver>>));
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT _terminal_tail_sender_to =  //
+UNIFEX_CONCEPT
+_terminal_tail_sender_to =
     UNIFEX_FRAGMENT(unifex::_terminal_tail_sender_operation_start, T, Receiver);
 
 template <typename T>
-UNIFEX_CONCEPT _tail_receiver =
-    (unifex::is_nothrow_receiver_of_v<T> &&
-     std::is_nothrow_copy_constructible_v<T> &&
-     std::is_nothrow_move_constructible_v<T> &&
-     std::is_nothrow_copy_assignable_v<T> &&
-     std::is_nothrow_move_assignable_v<T> &&
-     std::is_trivially_destructible_v<T>);
+UNIFEX_CONCEPT
+_tail_receiver =                                 //
+    (unifex::is_nothrow_receiver_of_v<T>)&&      //
+    (std::is_nothrow_copy_constructible_v<T>)&&  //
+    (std::is_nothrow_move_constructible_v<T>)&&  //
+    (std::is_nothrow_copy_assignable_v<T>)&&     //
+    (std::is_nothrow_move_assignable_v<T>)&&     //
+    (std::is_trivially_destructible_v<T>);
 
 struct null_tail_sender;
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(                                    //
-    _tail_sender_to_impl,                                   //
-    requires(T c, Receiver r)                               //
-        (c.sends_done,                                      //
-         unifex::connect(c, r)) &&                          //
-        (unifex::is_nothrow_connectable_v<T, Receiver>)&&   //
-        (_tail_operation<connect_result_t<T, Receiver>>)&&  //
+UNIFEX_CONCEPT_FRAGMENT(
+    _tail_sender_to_impl,
+    requires(T c, Receiver r)                              //
+        (c.sends_done, unifex::connect(c, r)) &&           //
+        (unifex::is_nothrow_connectable_v<T, Receiver>)&&  //
+        (_tail_operation<connect_result_t<
+             T,
+             Receiver>>)&&  //
         (tail_sender_or_void<next_tail_sender_to_t<T, Receiver>>));
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT _tail_sender_to =   //
-    ((_tail_sender<T>)&&           //
-     (_tail_receiver<Receiver>)&&  //
-     UNIFEX_FRAGMENT(unifex::_tail_sender_to_impl, T, Receiver));
+UNIFEX_CONCEPT
+_tail_sender_to =                 //
+    (_tail_sender<T>)&&           //
+    (_tail_receiver<Receiver>)&&  //
+    UNIFEX_FRAGMENT(unifex::_tail_sender_to_impl, T, Receiver);
 
 template <typename T, typename Receiver, typename... ValidTailSender>
-UNIFEX_CONCEPT_FRAGMENT(                                    //
-    _tail_sender_recurse,                                   //
+UNIFEX_CONCEPT_FRAGMENT(
+    _tail_sender_recurse,
     requires(T t, Receiver r)                               //
-        (t.sends_done,                                      //
-         unifex::connect(t, r)) &&                          //
+        (t.sends_done, unifex::connect(t, r)) &&            //
         (_tail_operation<connect_result_t<T, Receiver>>)&&  //
         (one_of<next_tail_sender_to_t<T, Receiver>, ValidTailSender...>));
 
 template <typename T, typename Receiver, typename... ValidTailSender>
-UNIFEX_CONCEPT _recursive_tail_sender_to =  //
-    (_tail_sender_to<T, Receiver>)&&        //
+UNIFEX_CONCEPT
+_recursive_tail_sender_to =           //
+    (_tail_sender_to<T, Receiver>)&&  //
     UNIFEX_FRAGMENT(
         unifex::_tail_sender_recurse, T, Receiver, ValidTailSender...);
 
 template <typename T>
-UNIFEX_CONCEPT _nullable_tail_operation =  //
-    (_tail_operation<T>)&&                 //
+UNIFEX_CONCEPT
+_nullable_tail_operation =  //
+    (_tail_operation<T>)&&  //
     nothrow_contextually_convertible_to_bool<T>;
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(    //
-    _tail_sender_nullable,  //
-    requires(T t)           //
-        (t.sends_done) &&   //
+UNIFEX_CONCEPT_FRAGMENT(
+    _tail_sender_nullable,
+    requires(T t)(t.sends_done) &&
         (_nullable_tail_operation<unifex::connect_result_t<T, Receiver>>));
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT _nullable_tail_sender_to =  //
+UNIFEX_CONCEPT
+_nullable_tail_sender_to =
     UNIFEX_FRAGMENT(unifex::_tail_sender_nullable, T, Receiver);
 
 struct tail_sender_base {
@@ -285,7 +283,9 @@ struct _has_tail_sender_start_impl {
            (!std::is_void_v<T>),
            (!same_as<null_tail_sender, T>),
            (!_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>),
-           (!_tail_sender_to<T, Receiver>)>)  //
+           (!_tail_sender_to<
+               T,
+               Receiver>)>)  //
       static inline constexpr bool _value() noexcept {
     static_assert(_tail_receiver<Receiver>);
     return false;
@@ -293,12 +293,14 @@ struct _has_tail_sender_start_impl {
 
   template(typename Receiver, typename T, typename... PrevTailSenders)  //
       (requires                                                         //
-       (!instance_of_v<_variant_tail_sender, T>) &&                     //
+       (!instance_of_v<_variant_tail_sender, T>) &&
        any_true<
            (std::is_void_v<T>),
            (same_as<null_tail_sender, T>),
            (_recursive_tail_sender_to<T, Receiver, PrevTailSenders...>),
-           (_tail_sender_to<T, Receiver>)>)  //
+           (_tail_sender_to<
+               T,
+               Receiver>)>)  //
       static inline constexpr bool _value() noexcept {
     static_assert(_tail_receiver<Receiver>);
     return true;
@@ -316,12 +318,9 @@ struct _has_tail_sender_start_impl {
     }
   };
 
-  template(
-      typename Receiver,
-      typename T,
-      typename... PrevTailSenders)                //
-      (requires                                   //
-       (instance_of_v<_variant_tail_sender, T>))  //
+  template(typename Receiver, typename T, typename... PrevTailSenders)  //
+      (requires                                                         //
+       (instance_of_v<_variant_tail_sender, T>))                        //
       static inline constexpr auto _value() noexcept
       -> decltype(_has_tail_sender_start_impl::
                       _variant_value_proxy<Receiver, PrevTailSenders...>::
@@ -338,38 +337,40 @@ inline constexpr bool _has_tail_sender_to = _has_tail_sender_start_impl::
     template _value<Receiver, T, PrevTailSenders...>();
 
 template <typename T>
-UNIFEX_CONCEPT tail_receiver =  //
-    (_tail_receiver<T>);
+UNIFEX_CONCEPT
+tail_receiver = (_tail_receiver<T>);
 
 template <typename T>
-UNIFEX_CONCEPT tail_operation =  //
-    (_tail_operation<T>);
+UNIFEX_CONCEPT
+tail_operation = (_tail_operation<T>);
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT tail_sender_to =       //
+UNIFEX_CONCEPT
+tail_sender_to =                      //
     (_tail_sender_to<T, Receiver>)&&  //
     (_has_tail_sender_to<T, Receiver>);
 
 template <typename T>
-UNIFEX_CONCEPT tail_sender =  //
-    (tail_sender_to<T, null_tail_receiver>);
+UNIFEX_CONCEPT
+tail_sender = (tail_sender_to<T, null_tail_receiver>);
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT terminal_tail_sender_to =  //
-    (tail_sender_to<T, Receiver>)&&       //
+UNIFEX_CONCEPT
+terminal_tail_sender_to =            //
+    (tail_sender_to<T, Receiver>)&&  //
     (_terminal_tail_sender_to<T, Receiver>);
 
 template <typename T>
-UNIFEX_CONCEPT terminal_tail_sender =  //
-    (terminal_tail_sender_to<T, null_tail_receiver>);
+UNIFEX_CONCEPT
+terminal_tail_sender = (terminal_tail_sender_to<T, null_tail_receiver>);
 
 template <typename T, typename Receiver>
-UNIFEX_CONCEPT nullable_tail_sender_to =  //
-    (_nullable_tail_sender_to<T, Receiver>);
+UNIFEX_CONCEPT
+nullable_tail_sender_to = (_nullable_tail_sender_to<T, Receiver>);
 
 template <typename T>
-UNIFEX_CONCEPT nullable_tail_sender =  //
-    (nullable_tail_sender_to<T, null_tail_receiver>);
+UNIFEX_CONCEPT
+nullable_tail_sender = (nullable_tail_sender_to<T, null_tail_receiver>);
 
 template(typename C)     //
     (requires            //
@@ -450,11 +451,10 @@ struct _op {
     op_t op_;
     Receiver r_;
     template <typename TailFn2, typename Receiver2>
-    type(TailFn2&& t, Receiver2 r)  //
-        noexcept(noexcept(op_t(t())) && noexcept(Receiver(r)))
+    type(TailFn2&& t, Receiver2 r) noexcept(
+        noexcept(op_t(t())) && noexcept(Receiver(r)))
       : op_(t())
-      , r_(r)  //
-    {}
+      , r_(r) {}
     inline constexpr explicit operator bool() const noexcept {
       if constexpr (nothrow_contextually_convertible_to_bool<op_t>) {
         return !!op_;
@@ -462,16 +462,14 @@ struct _op {
         return true;
       }
     }
-    template(typename... As)    //
-        (requires               //
-         (sizeof...(As) == 0))  //
+    template(typename... As)            //
+        (requires(sizeof...(As) == 0))  //
         void unwind(As...) noexcept {
       unifex::set_done(std::move(r_));
       op_.unwind();
     }
-    template(typename... As)    //
-        (requires               //
-         (sizeof...(As) == 0))  //
+    template(typename... As)            //
+        (requires(sizeof...(As) == 0))  //
         auto start(As&&...) noexcept {
       unifex::set_value(std::move(r_));
       if constexpr (std::is_void_v<decltype(unifex::start(op_))>) {
@@ -488,14 +486,12 @@ struct _sender {
   struct type : tail_sender_base {
     remove_cvref_t<TailFn> t_;
 
-    template(typename TailFn2)                                      //
-        (requires                                                   //
-         std::is_constructible_v<remove_cvref_t<TailFn>, TailFn2>)  //
-        type(TailFn2&& t)                                           //
-        noexcept(
+    template(typename TailFn2)                                        //
+        (requires                                                     //
+         (std::is_constructible_v<remove_cvref_t<TailFn>, TailFn2>))  //
+        type(TailFn2&& t) noexcept(
             std::is_nothrow_constructible_v<remove_cvref_t<TailFn>, TailFn2>)
-      : t_(t)  //
-    {}
+      : t_(t) {}
 
     template(typename Receiver)        //
         (requires                      //

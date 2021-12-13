@@ -45,28 +45,28 @@ template <template <template <typename...> class> class>
 struct _has_error_types;
 
 template <typename S>
-UNIFEX_CONCEPT_FRAGMENT(     //
-    _has_sender_types_impl,  //
-    requires()(              //
+UNIFEX_CONCEPT_FRAGMENT(
+    _has_sender_types_impl,
+    requires()(  //
         typename(std::bool_constant<S::sends_done>),
         typename(_has_value_types<S::template value_types>),
         typename(_has_error_types<S::template error_types>)));
 template <typename S>
-UNIFEX_CONCEPT           //
-    _has_sender_types =  //
+UNIFEX_CONCEPT
+_has_sender_types =  //
     UNIFEX_FRAGMENT(detail::_has_sender_types_impl, S);
 
 template <typename S>
-UNIFEX_CONCEPT_FRAGMENT(          //
-    _has_bulk_sender_types_impl,  //
-    requires()(                   //
+UNIFEX_CONCEPT_FRAGMENT(
+    _has_bulk_sender_types_impl,
+    requires()(  //
         typename(std::bool_constant<S::sends_done>),
         typename(_has_value_types<S::template value_types>),
         typename(_has_value_types<S::template next_types>),
         typename(_has_error_types<S::template error_types>)));
 template <typename S>
-UNIFEX_CONCEPT                //
-    _has_bulk_sender_types =  //
+UNIFEX_CONCEPT
+_has_bulk_sender_types =  //
     UNIFEX_FRAGMENT(detail::_has_bulk_sender_types_impl, S);
 
 struct _void_sender_traits {
@@ -115,13 +115,13 @@ struct _no_sender_traits {
 // Workaround for unknown MSVC (19.28.29333) bug
 #ifndef _MSC_VER
 template <typename S>
-UNIFEX_CONCEPT_FRAGMENT(     //
-    _not_has_sender_traits,  //
-    requires()(              //
+UNIFEX_CONCEPT_FRAGMENT(
+    _not_has_sender_traits,
+    requires()(  //
         typename(typename sender_traits<S>::_unspecialized)));
 template <typename S>
-UNIFEX_CONCEPT            //
-    _has_sender_traits =  //
+UNIFEX_CONCEPT
+_has_sender_traits =  //
     (!UNIFEX_FRAGMENT(detail::_not_has_sender_traits, S));
 #else
 template <typename S>
@@ -147,22 +147,22 @@ template <typename S>
 struct sender_traits : decltype(detail::_select_sender_traits<S>()) {};
 
 template <typename S>
-UNIFEX_CONCEPT  //
-    sender =    //
-    move_constructible<remove_cvref_t<S>>&&
-        detail::_has_sender_traits<remove_cvref_t<S>>;
+UNIFEX_CONCEPT
+sender =  //
+    move_constructible<remove_cvref_t<S>> &&
+    detail::_has_sender_traits<remove_cvref_t<S>>;
 
 template <typename S>
-UNIFEX_CONCEPT      //
-    typed_sender =  //
-    sender<S>&&     //
-        detail::_has_sender_types<sender_traits<remove_cvref_t<S>>>;
+UNIFEX_CONCEPT
+typed_sender =    //
+    sender<S> &&  //
+    detail::_has_sender_types<sender_traits<remove_cvref_t<S>>>;
 
 template <typename S>
-UNIFEX_CONCEPT           //
-    typed_bulk_sender =  //
-    sender<S>&&          //
-        detail::_has_bulk_sender_types<sender_traits<remove_cvref_t<S>>>;
+UNIFEX_CONCEPT
+typed_bulk_sender =  //
+    sender<S> &&     //
+    detail::_has_bulk_sender_types<sender_traits<remove_cvref_t<S>>>;
 
 namespace _start_cpo {
 inline const struct _fn {
@@ -195,20 +195,20 @@ using _member_connect_result_t =
     decltype((UNIFEX_DECLVAL(Sender &&)).connect(UNIFEX_DECLVAL(Receiver &&)));
 
 template <typename Sender, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(   //
-    _has_member_connect_,  //
-    requires()(            //
+UNIFEX_CONCEPT_FRAGMENT(
+    _has_member_connect_,
+    requires()(  //
         typename(_member_connect_result_t<Sender, Receiver>)));
 template <typename Sender, typename Receiver>
-UNIFEX_CONCEPT              //
-    _with_member_connect =  //
-    sender<Sender>&&
-        UNIFEX_FRAGMENT(_connect::_has_member_connect_, Sender, Receiver);
+UNIFEX_CONCEPT
+_with_member_connect =  //
+    sender<Sender> &&
+    UNIFEX_FRAGMENT(_connect::_has_member_connect_, Sender, Receiver);
 
 template <typename Sender, typename Receiver>
-UNIFEX_CONCEPT          //
-    _with_tag_invoke =  //
-    sender<Sender>&& tag_invocable<_cpo::_fn, Sender, Receiver>;
+UNIFEX_CONCEPT
+_with_tag_invoke =  //
+    sender<Sender> && tag_invocable<_cpo::_fn, Sender, Receiver>;
 
 namespace _cpo {
 struct _fn {
@@ -256,21 +256,24 @@ inline const _connect::_cpo::_fn connect{};
 // Define the sender_to concept without macros for
 // improved diagnostics:
 template <typename Sender, typename Receiver>
-concept          //
-    sender_to =  //
-    sender<Sender> && receiver<Receiver> && requires(Sender&& s, Receiver&& r) {
+concept sender_to =        //
+    sender<Sender> &&      //
+    receiver<Receiver> &&  //
+    requires(Sender&& s, Receiver&& r) {
   connect((Sender &&) s, (Receiver &&) r);
 };
 #else
 template <typename Sender, typename Receiver>
-UNIFEX_CONCEPT_FRAGMENT(                 //
-    _sender_to,                          //
+UNIFEX_CONCEPT_FRAGMENT(
+    _sender_to,
     requires(Sender&& s, Receiver&& r)(  //
         connect((Sender &&) s, (Receiver &&) r)));
 template <typename Sender, typename Receiver>
-UNIFEX_CONCEPT  //
-    sender_to = sender<Sender>&& receiver<Receiver>&&
-        UNIFEX_FRAGMENT(_sender_to, Sender, Receiver);
+UNIFEX_CONCEPT             //
+sender_to =                //
+    sender<Sender> &&      //
+    receiver<Receiver> &&  //
+    UNIFEX_FRAGMENT(_sender_to, Sender, Receiver);
 #endif
 
 template <typename Sender, typename Receiver>
@@ -321,16 +324,17 @@ using _is_single_valued_variant =
     std::bool_constant<sizeof...(Types) == 1 && (Types::value && ...)>;
 
 template <typename Sender>
-UNIFEX_CONCEPT_FRAGMENT(        //
-    _single_typed_sender_impl,  //
-    requires()(0) &&            //
+UNIFEX_CONCEPT_FRAGMENT(
+    _single_typed_sender_impl,
+    requires()(0) &&  //
         sender_traits<remove_cvref_t<Sender>>::template value_types<
             _is_single_valued_variant,
             _is_single_valued_tuple>::value);
 
 template <typename Sender>
-UNIFEX_CONCEPT single_typed_sender = typed_sender<Sender>&&
-    UNIFEX_FRAGMENT(_single_typed_sender_impl, Sender);
+UNIFEX_CONCEPT
+single_typed_sender =
+    typed_sender<Sender> && UNIFEX_FRAGMENT(_single_typed_sender_impl, Sender);
 
 template <typename Sender, template <typename...> class Variant>
 using sender_error_types_t =

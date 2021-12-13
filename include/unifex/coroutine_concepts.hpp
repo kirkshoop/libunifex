@@ -18,7 +18,7 @@
 #include <unifex/coroutine.hpp>
 
 #if UNIFEX_NO_COROUTINES
-# error "Coroutine support is required to use <unifex/coroutine_concepts.hpp>"
+#  error "Coroutine support is required to use <unifex/coroutine_concepts.hpp>"
 #endif
 
 #include <type_traits>
@@ -57,7 +57,7 @@ struct await_result_impl<
   using type = decltype(std::declval<Awaiter&>().await_resume());
 };
 
-} // namespace detail
+}  // namespace detail
 
 inline const struct _get_awaiter_fn {
   template <typename Awaitable>
@@ -70,7 +70,7 @@ inline const struct _get_awaiter_fn {
       return static_cast<Awaitable&&>(awaitable);
     }
   }
-} get_awaiter {};
+} get_awaiter{};
 
 template <typename Awaitable>
 using awaiter_type_t = decltype(get_awaiter(std::declval<Awaitable>()));
@@ -80,18 +80,17 @@ using await_result_t =
     typename detail::await_result_impl<awaiter_type_t<Awaitable>>::type;
 
 namespace detail {
-  template <typename Awaitable>
-  UNIFEX_CONCEPT_FRAGMENT( //
-    _awaitable_impl,         //
-      requires() (         //
-        typename(await_result_t<Awaitable>)
-      ));
-  template <typename Awaitable>
-  UNIFEX_CONCEPT //
-    _awaitable = //
-      UNIFEX_FRAGMENT(detail::_awaitable_impl, Awaitable);
-} // namespace detail
+template <typename Awaitable>
+UNIFEX_CONCEPT_FRAGMENT(
+    _awaitable_impl,
+    requires()(  //
+        typename(await_result_t<Awaitable>)));
+template <typename Awaitable>
+UNIFEX_CONCEPT
+_awaitable =  //
+    UNIFEX_FRAGMENT(detail::_awaitable_impl, Awaitable);
+}  // namespace detail
 
-} // namespace unifex
+}  // namespace unifex
 
 #include <unifex/detail/epilogue.hpp>

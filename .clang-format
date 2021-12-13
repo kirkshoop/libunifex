@@ -97,3 +97,4 @@ SpacesInAngles: false
 SpacesInCStyleCastParentheses: false
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
+StatementMacros: ['UNIFEX_CONCEPT', 'UNIFEX_CONCEPT_FRAGMENT']
