@@ -16,6 +16,7 @@
 #pragma once
 
 #include <unifex/config.hpp>
+#include <unifex/continuations.hpp>
 #include <unifex/scheduler_concepts.hpp>
 #include <unifex/sequence_concepts.hpp>
 #include <unifex/variant_tail_sender.hpp>
@@ -177,8 +178,12 @@ struct interval_fn::op<Clock, Receiver, SenderFactory>::tail_restart {
       auto op = op_;
       op->tick_ += op->gap_;
 
-      op->tickOp_.~decltype(op->tickOp_)();
-      op->factoryOp_.~decltype(op->factoryOp_)();
+      using tick_op_t = decltype(op->tickOp_);
+      op->tickOp_.~tick_op_t();
+
+      using factory_op_t = decltype(op->factoryOp_);
+      op->factoryOp_.~factory_op_t();
+
       UNIFEX_TRY {
         new (&op->tickOp_) auto(unifex::connect(
             unifex::schedule_at(op->scheduler_, op->tick_), tick_receiver{op}));
