@@ -82,17 +82,14 @@ contextually_convertible_to_bool =
     UNIFEX_FRAGMENT(unifex::_contextually_convertible_to_bool, T);
 
 template <typename T>
-UNIFEX_CONCEPT_FRAGMENT(
-    _nothrow_contextually_convertible_to_bool,
-    requires(const T c)  //
-    ((static_cast<const T&&>(c) ? (void)0 : (void)0)) && noexcept(
-        (std::declval<const T&&>() ? (void)0 : (void)0)));
+static constexpr bool _nothrow_contextually_convertible_to_bool =
+    noexcept((std::declval<const T&&>() ? (void)0 : (void)0));
 
 template <typename T>
 UNIFEX_CONCEPT
 nothrow_contextually_convertible_to_bool =
     contextually_convertible_to_bool<T> &&
-    UNIFEX_FRAGMENT(unifex::_nothrow_contextually_convertible_to_bool, T);
+    _nothrow_contextually_convertible_to_bool<T>;
 
 template <typename T>
 UNIFEX_CONCEPT

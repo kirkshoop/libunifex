@@ -42,11 +42,15 @@ using next_tail_operation_t =
     unifex::callable_result_t<unifex::tag_t<unifex::start>, T&>;
 
 template <typename T>
+static constexpr bool noexcept_unwind = noexcept(std::declval<T>().unwind());
+
+template <typename T>
 UNIFEX_CONCEPT_FRAGMENT(
     _tail_operation_impl,
-    requires(T& c)(c.unwind(), unifex::start(c)) && noexcept(
-        std::declval<T>().unwind()) &&
-        same_as<decltype(std::declval<T>().unwind()), void> &&
+    requires(T& c)                                              //
+        (c.unwind(), unifex::start(c)) &&                       //
+        noexcept_unwind<T> &&                                   //
+        same_as<decltype(std::declval<T>().unwind()), void> &&  //
         unifex::is_nothrow_callable_v<unifex::tag_t<unifex::start>, T&>);
 
 template <typename T>
